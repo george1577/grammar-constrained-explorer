@@ -175,3 +175,30 @@ class Model:
     paid: bool
     vendor: Vendor
 """
+
+
+# As Qwen does on "Clients (€43)": after the amount it wants a newline and then "}", ending the
+# object before the required `currency`. Every "}" is disallowed, so it falls back on whitespace.
+WANTS_TO_END_BEFORE_CURRENCY = (
+    [["{"], ["\""], ["purpose"], ["\":"], [" "], ["\""], ["taxi"], ["\""], [","], [" \""], ["amount"],
+     ["\":"], [" "], ["32.30"]]
+    + [["}", "\n", ","]] * 60
+)
+
+
+def test_with_whitespace_unlimited_a_required_field_can_trap_the_model_in_a_whitespace_loop():
+    result = run_structured(FakeModel(WANTS_TO_END_BEFORE_CURRENCY, vocab=INVOICE_VOCAB + ["\n"]), INVOICE.schema, INVOICE.system_prompt,
+                            INVOICE.inputs["Clients (€43)"], max_new_tokens=30, limit_whitespace=False)
+
+    assert result.constrained.text == '{"purpose": "taxi", "amount": 32.30' + "\n" * 16
+    assert result.constrained.stop_reason == "token limit"
+    assert not result.complete
+    assert "ws     ::= [ \\t\\n]*" in result.grammar_text
+
+
+def test_with_whitespace_limited_the_model_is_pushed_on_to_the_required_field():
+    result = run_structured(FakeModel(WANTS_TO_END_BEFORE_CURRENCY, vocab=INVOICE_VOCAB + ["\n"]), INVOICE.schema, INVOICE.system_prompt,
+                            INVOICE.inputs["Clients (€43)"], max_new_tokens=30, limit_whitespace=True)
+
+    assert result.constrained.text.startswith('{"purpose": "taxi", "amount": 32.30\n,')
+    assert "ws     ::= [ \\t\\n]*" not in result.grammar_text

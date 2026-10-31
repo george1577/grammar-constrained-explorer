@@ -15,7 +15,7 @@ import re
 from typing import Optional
 
 from grammar_lab.gbnf import GrammarError, gbnf_literal
-from grammar_lab.json_grammar import LIMITED_WS, NUMBER_RULES, STRING_RULES
+from grammar_lab.json_grammar import NUMBER_RULES, STRING_RULES, whitespace_rules
 
 ROOT = "root"
 PRIMITIVE_RULES = {"string": STRING_RULES, **NUMBER_RULES}
@@ -125,14 +125,17 @@ class _Checker:
                                  f"(supported here: {', '.join(sorted(allowed))})", path + (keyword,))
 
 
-def schema_to_gbnf(schema_text: str) -> str:
-    """GBNF text whose root rule matches exactly the JSON the schema describes, or raise SchemaError."""
+def schema_to_gbnf(schema_text: str, limit_whitespace: bool = True) -> str:
+    """GBNF text whose root rule matches exactly the JSON the schema describes, or raise SchemaError.
+
+    ``limit_whitespace`` chooses the ``ws`` rule, as in JSON mode (see json_grammar.py).
+    """
     schema = parse_schema(schema_text)
     rules: dict[str, str] = {}
     used: set[str] = set()
     _object_rule(ROOT, schema, rules, used)
     shared = "".join(PRIMITIVE_RULES[name] for name in PRIMITIVE_RULES if name in used)
-    return "".join(f"{name} ::= {body}\n" for name, body in rules.items()) + shared + LIMITED_WS
+    return "".join(f"{name} ::= {body}\n" for name, body in rules.items()) + shared + whitespace_rules(limit_whitespace)
 
 
 def _object_rule(name: str, schema: dict, rules: dict[str, str], used: set[str]) -> str:

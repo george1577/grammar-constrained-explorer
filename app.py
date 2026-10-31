@@ -185,7 +185,7 @@ with tab3:
     st.markdown(
         "JSON mode is a grammar too: one that allows **any** valid JSON object. The output is "
         "guaranteed to parse, but the grammar says nothing about which keys appear or what type each "
-        "value has. Only the prompt asks for `author`, `title` and `year`."
+        "value has. Only the prompt can ask for particular keys, such as `author`, `title` and `year`."
     )
     jpreset = JSON_PRESETS[st.selectbox("Preset (from notebook 2a)", list(JSON_PRESETS), key="t3_preset")]
     left, right = st.columns([2, 1])
@@ -206,11 +206,16 @@ with tab3:
         st.code(json_gbnf(limit_whitespace), language=None, wrap_lines=True)
     st.info(
         "**Keys and value types are not controlled.** Inside an object the grammar allows any string as a "
-        "key and any JSON value after it, so the model may pick its own keys (`writer` instead of "
-        "`author`) or write the string `\"NULL\"` where JSON's `null` was meant. JSON strings allow any "
+        "key and any JSON value after it. Only the prompt asks for particular keys: with the preset whose "
+        "prompt doesn't name them, Qwen 0.5B writes `publication_year` instead of `year`. Value types are "
+        "up to the model too: on the Tirukkural paragraph it writes `\"year\": \"450-500 CE\"`, a string "
+        "(the notebook's GPT-4o-mini wrote the string `\"NULL\"` where JSON's `null` was meant). JSON strings allow any "
         "character, so accents such as \"García Márquez\" survive here, unlike tab ①'s `[a-zA-Z ]`. "
-        "Whitespace is optional everywhere in JSON: turn **Limit whitespace** off to watch a model that "
-        "favours newlines or spaces keep writing them, because the grammar never forces it to stop."
+        "Whitespace is optional everywhere in JSON, so **Limit whitespace** caps each gap. A whitespace loop "
+        "happens when the model wants a token the grammar disallows and whitespace is the best allowed "
+        "token left. JSON mode rarely forces that: in the app's smoke test Qwen 0.5B never looped on "
+        "these presets, with the limit on or off. To see a real loop, turn the limit off in tab ④ and "
+        "run \"Clients (€43)\", where a required field does the forcing."
     )
 
     if st.button("Generate both runs", type="primary", key="t3_go"):
@@ -243,6 +248,10 @@ with tab4:
         user_text = st.text_area("Input text", spreset.inputs[input_name], height=100,
                                  key=f"t4_text_{spreset.name}_{input_name}")
     with right:
+        limit_ws4 = st.toggle(
+            "Limit whitespace", value=True, key="t4_limit_ws",
+            help="As in tab ③. Turn it off and run \"Clients (€43)\": the model wants to close the object "
+                 "before the required `currency`, every `}` is disallowed, and it writes newlines instead.")
         max_new_tokens = st.slider("Max new tokens", 10, 256, 64, key="t4_max")
     with st.expander("System prompt (from the notebook)"):
         system_prompt = st.text_area("System prompt", spreset.system_prompt, height=110,
@@ -254,7 +263,7 @@ with tab4:
             "JSON Schema", spreset.schema, height=380, key=f"t4_schema_{spreset.name}",
             help="Supported: type object, string, number, integer or boolean; properties; required; enum; "
                  "nested objects; and title, description and default.")
-    preview = preview_schema(schema)
+    preview = preview_schema(schema, limit_ws4)
     with vcol:
         if preview.error:
             st.markdown("**Schema error**")
@@ -273,12 +282,18 @@ with tab4:
         "would multiply the alternatives the grammar has to spell out. So `currency` must be written even "
         "though it defaults to `USD`, and `purpose` always comes first. The model has to infer the "
         "currency, since the system prompt never mentions it. Field order also matters for quality: "
-        "the model writes earlier fields first and can use them when choosing later ones."
+        "the model writes earlier fields first and can use them when choosing later ones.\n\n"
+        "**A real whitespace loop.** On \"Clients (€43)\" and \"Dinner (₹820)\" Qwen 0.5B wants to "
+        "end the object right after `amount`, but `}` is disallowed until `currency` is written. The most "
+        "likely token that is still allowed is whitespace. With **Limit whitespace** on, it uses up the "
+        "allowed indent (hence the odd `43⏎            ,`) and is then pushed on to `currency`. Turn it "
+        "off and the same run writes newlines until the token limit: ⚠️ incomplete output."
     )
 
     if st.button("Generate both runs", type="primary", key="t4_go", disabled=bool(preview.error)):
         with st.spinner("Converting the schema and generating without and with it…"):
-            st.session_state.t4 = (schema, run_structured(lm, schema, system_prompt, user_text, max_new_tokens))
+            st.session_state.t4 = (schema, run_structured(lm, schema, system_prompt, user_text, max_new_tokens,
+                                                              limit_ws4))
 
     if "t4" in st.session_state:
         used_schema, res = st.session_state.t4
