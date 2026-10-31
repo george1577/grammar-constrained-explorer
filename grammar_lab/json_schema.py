@@ -12,6 +12,7 @@ Supported: ``type`` object, string, number, integer or boolean; ``properties``; 
 
 import json
 import re
+from typing import Optional
 
 from grammar_lab.gbnf import GrammarError, gbnf_literal
 from grammar_lab.json_grammar import LIMITED_WS, NUMBER_RULES, STRING_RULES
@@ -166,3 +167,66 @@ def _rule_name(key: str, rules: dict[str, str]) -> str:
     while name in rules:
         name, n = f"{base}-{n}", n + 1
     return name
+
+
+# ---- read-only dataclass view -----------------------------------------------------------
+
+PYTHON_TYPES = {"string": "str", "number": "float", "integer": "int", "boolean": "bool"}
+
+
+def schema_to_dataclass(schema_text: str) -> str:
+    """Python source for dataclasses (and Enums) equivalent to the schema, for reading only.
+
+    Fields keep schema order. A field outside ``required`` with no default is shown as
+    ``T | None = None``; in the grammar it is still required.
+    """
+    schema = parse_schema(schema_text)
+    blocks: list[str] = []
+    imports: set[str] = set()
+    _dataclass(schema.get("title") or "Model", schema, blocks, imports)
+    header = ["from dataclasses import dataclass"]
+    header += [line for line in ("from enum import Enum", "from typing import Literal") if line in imports]
+    return "\n".join(header) + "\n\n\n" + "\n\n".join(blocks)
+
+
+def _dataclass(name: str, schema: dict, blocks: list[str], imports: set[str]) -> str:
+    required = set(schema.get("required", []))
+    lines = ["@dataclass", f"class {name}:"]
+    for key, field in schema.get("properties", {}).items():
+        annotation, default = _annotation(key, field, blocks, imports)
+        if default is None and key not in required:
+            annotation, default = f"{annotation} | None", "None"
+        lines.append(f"    {key}: {annotation}" + (f" = {default}" if default is not None else ""))
+    if len(lines) == 2:
+        lines.append("    pass")
+    blocks.append("\n".join(lines) + "\n")
+    return name
+
+
+def _annotation(key: str, field: dict, blocks: list[str], imports: set[str]) -> tuple[str, Optional[str]]:
+    """The field's type annotation and default (as Python source, or None if it has no default)."""
+    default = repr(field["default"]) if "default" in field else None
+    if field.get("type") == "object":
+        return _dataclass(field.get("title") or _camel(key), field, blocks, imports), default
+    if "enum" in field and all(isinstance(v, str) for v in field["enum"]):
+        imports.add("from enum import Enum")
+        enum_name = field.get("title") or _camel(key) + "Enum"
+        members = {value: _member_name(value) for value in field["enum"]}
+        body = "\n".join(f"    {member} = {value!r}" for value, member in members.items())
+        blocks.append(f"class {enum_name}(str, Enum):\n{body}\n")
+        if field.get("default") in members:
+            default = f"{enum_name}.{members[field['default']]}"
+        return enum_name, default
+    if "enum" in field:
+        imports.add("from typing import Literal")
+        return f"Literal[{', '.join(repr(v) for v in field['enum'])}]", default
+    return PYTHON_TYPES[field["type"]], default
+
+
+def _camel(key: str) -> str:
+    return "".join(part[:1].upper() + part[1:] for part in re.split(r"[^A-Za-z0-9]+", key) if part) or "Field"
+
+
+def _member_name(value: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9_]+", "_", value).strip("_") or "EMPTY"
+    return f"_{name}" if name[0].isdigit() else name

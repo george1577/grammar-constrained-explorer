@@ -17,7 +17,8 @@ class GrammarRunResult:
     constrained: Optional[Run] = None
     unconstrained: Optional[Run] = None
     error: Optional[GrammarError] = None  # set when the grammar (or regex) fails to parse
-    grammar_text: Optional[str] = None    # the GBNF actually used, when generated (regex tab)
+    grammar_text: Optional[str] = None    # the GBNF actually used, when generated (tabs ②–④)
+    dataclass_view: Optional[str] = None  # tab ④: the schema as read-only Python dataclasses
 
     @property
     def complete(self) -> bool:
@@ -81,6 +82,7 @@ def run_structured(model: ModelBoundary, schema: str, system_prompt: str, user_t
         return GrammarRunResult(error=error)
     result = run_grammar(model, grammar_text, json_schema.ROOT, system_prompt, user_text, max_new_tokens)
     result.grammar_text = grammar_text
+    result.dataclass_view = json_schema.schema_to_dataclass(schema)
     return result
 
 

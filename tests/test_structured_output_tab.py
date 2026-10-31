@@ -132,3 +132,46 @@ def test_schema_errors_name_the_field_they_are_about():
     result = run_invoice(invoice_model(WAYWARD_SCRIPT), schema=schema_with('{"type": "array"}'))
 
     assert "`amount`" in str(result.error)
+
+
+def test_the_invoice_schema_is_shown_as_the_notebooks_dataclass():
+    result = run_invoice(invoice_model(WAYWARD_SCRIPT))
+
+    assert result.dataclass_view == """from dataclasses import dataclass
+from enum import Enum
+
+
+class CurrencyEnum(str, Enum):
+    USD = 'USD'
+    UKP = 'UKP'
+    INR = 'INR'
+    EUR = 'EUR'
+
+
+@dataclass
+class Invoice:
+    purpose: str
+    amount: float
+    currency: CurrencyEnum = CurrencyEnum.USD
+"""
+
+
+def test_nested_objects_and_optional_fields_in_the_dataclass_view():
+    schema = NESTED_SCHEMA.replace('"rating": {"type": "integer"}', '"rating": {"enum": [1, 2, 3]}')
+    result = run_structured(FakeModel([[EOS]], vocab=NESTED_VOCAB), schema, "", "", 5)
+
+    assert result.dataclass_view == """from dataclasses import dataclass
+from typing import Literal
+
+
+@dataclass
+class Vendor:
+    name: str | None = None
+    rating: Literal[1, 2, 3] | None = None
+
+
+@dataclass
+class Model:
+    paid: bool
+    vendor: Vendor
+"""
