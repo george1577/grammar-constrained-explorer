@@ -13,6 +13,7 @@ class GrammarPreset:
     grammar: str
     root: str
     inputs: dict[str, str]  # input name -> user text
+    callout: str = ""       # a lesson shown next to this preset (Markdown)
 
 
 CHOLERA = """
@@ -47,6 +48,13 @@ separator ::= "|"
 """,
     root="record",
     inputs={"Cholera": CHOLERA, "Tirukkural": TIRUKKURAL},
+    callout=(
+        "**Why does \"García Márquez\" become \"Garcia Marquez\"?** The `author` rule only allows "
+        "the characters in `[a-zA-Z ]`. Tokens such as ` García` contain `í`, which is not in that "
+        "class, so they are **disallowed** and the model has to pick the best token that is allowed: "
+        "` Garcia`. A character class limits which characters can appear at all, so a grammar that "
+        "validates the format can also quietly change the content."
+    ),
 )
 
 # Notebook 1, get_expression_that_solves (transformers-cfg). The second question is the
@@ -77,6 +85,12 @@ Mae has 2 apples and 4 oranges.
 Do Bill and Mae have more apples than oranges?
 """,
     },
+    callout=(
+        "**A grammar that is too strict.** The \"more apples than oranges?\" question needs a "
+        "comparison such as `3 + 2 > 2 + 4`, but the grammar only allows `expr = term`. Every `>` is "
+        "**disallowed**, so the model is pushed into odd equations and often loops until the token "
+        "limit, giving ⚠️ incomplete output."
+    ),
 )
 
 GRAMMAR_PRESETS = {p.name: p for p in (ARITHMETIC, BOOK_RECORD)}
@@ -98,3 +112,50 @@ BOOK_REGEX = RegexPreset(
     regex=r"([a-zA-Z ]+|NULL) \| ([a-zA-Z ]+|NULL) \| ([1-2][0-9][0-9][0-9]|NULL)",
     inputs={"Cholera": CHOLERA, "Tirukkural": TIRUKKURAL},
 )
+
+REGEX_PRESETS = {BOOK_REGEX.name: BOOK_REGEX}
+
+
+# ---- read-only notebook snippets ------------------------------------------------------------
+
+TRANSFORMERS_CFG_SNIPPET = '''from transformers_cfg.grammar_utils import IncrementalGrammarConstraint
+from transformers_cfg.generation.logits_process import GrammarConstrainedLogitsProcessor
+
+grammar = IncrementalGrammarConstraint(grammar_str, "root", pipe.tokenizer)
+grammar_processor = GrammarConstrainedLogitsProcessor(grammar)
+
+input_message = [
+    {"role": "system", "content": system_prompt},
+    {"role": "user", "content": math_problem}
+]
+results = pipe(input_message,
+               max_new_tokens=256,
+               do_sample=False,
+               logits_processor=[grammar_processor])
+'''
+
+# The notebook's convert_message_to_prompt has no `return` (so the generator gets None) and
+# writes ChatML tags that Phi-3 does not use; the snippet adds the missing `return prompt`.
+OUTLINES_SNIPPET = '''import outlines
+model = outlines.models.transformers("microsoft/Phi-3-mini-4k-instruct")
+
+def convert_message_to_prompt(messages):
+    prompt = ""
+    for message in messages:
+        prompt += f"""
+<|im_start|>{message['role']}
+{message['content']}
+<|im_end|>
+        """
+    prompt += """
+    <|im_start|>assistant
+    """
+    return prompt  # missing in the notebook
+
+generator = outlines.generate.regex(
+    model,
+    r"([a-zA-Z ]+|NULL) \\| ([a-zA-Z ]+|NULL) \\| ([1-2][0-9][0-9][0-9]|NULL)",
+    sampler=outlines.samplers.greedy(),
+)
+structured = generator(convert_message_to_prompt(input_message), max_tokens=30)
+'''

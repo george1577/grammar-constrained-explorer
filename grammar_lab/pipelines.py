@@ -1,5 +1,6 @@
 """One entry point per tab: connects the model boundary to the grammar engine."""
 
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -51,3 +52,12 @@ def run_regex(model: ModelBoundary, regex: str, system_prompt: str, user_text: s
     result = run_grammar(model, grammar_text, ROOT, system_prompt, user_text, max_new_tokens)
     result.grammar_text = grammar_text
     return result
+
+
+def rule_names(grammar: str) -> list[str]:
+    """The rule names defined in GBNF text, in order, for choosing the root rule.
+
+    A plain line scan, so the choices stay available while the grammar has errors.
+    """
+    names = re.findall(r"^[ \t]*([A-Za-z0-9_-]+)[ \t]*::=", grammar, flags=re.MULTILINE)
+    return list(dict.fromkeys(names))

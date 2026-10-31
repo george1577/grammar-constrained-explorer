@@ -126,3 +126,10 @@ def test_arithmetic_runs_use_the_notebook_system_prompt_and_questions():
     assert "Respond with the mathematical expression" in system["content"]
     assert user["content"].endswith("How many total apples do Bill and Mae have?\n")
     assert model.prompts[1][1]["content"].endswith("Do Bill and Mae have more apples than oranges?\n")
+
+
+def test_root_rule_choices_list_the_rules_in_order_even_while_the_grammar_is_broken():
+    from grammar_lab.pipelines import rule_names
+
+    assert rule_names(ARITHMETIC.grammar) == ["root", "expr", "term", "ident", "num", "ws"]
+    assert rule_names('# comment\nrecord ::= author "|" (\nauthor-name ::= [a-z]*') == ["record", "author-name"]
