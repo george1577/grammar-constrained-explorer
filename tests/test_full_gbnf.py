@@ -1,6 +1,6 @@
 """Tab ① with the full GBNF subset, through the pipeline entry point, with a fake model."""
 
-from grammar_lab.pipelines import run_grammar
+from grammar_lab.pipelines import StopReason, run_grammar
 from grammar_lab.presets import ARITHMETIC
 from tests.fakes import EOS, IM_START, VOCAB, FakeModel
 
@@ -27,7 +27,7 @@ def test_arithmetic_preset_produces_an_equation_for_total_apples():
     result = run_arithmetic(arith(script), "Total apples")
 
     assert result.constrained.text == "bill_apples +mae_apples = total_apples\n"
-    assert result.constrained.stop_reason == "end of sequence"
+    assert result.constrained.stop_reason == StopReason.END_OF_SEQUENCE
     assert result.complete
 
 
@@ -37,7 +37,7 @@ def test_a_grammar_too_strict_forces_equals_where_the_model_wants_greater_than()
 
     assert result.unconstrained.text == "3 +2 >2"
     assert result.constrained.text == "3 +2 =2"
-    assert result.constrained.stop_reason == "token limit"
+    assert result.constrained.stop_reason == StopReason.TOKEN_LIMIT
     assert not result.complete
 
 
@@ -60,7 +60,7 @@ def test_comments_negated_classes_and_optional_groups():
     assert with_year.constrained.text == "Gabriel García |1985"
     assert with_year.complete
     assert without_year.constrained.text == "Gabriel"
-    assert without_year.constrained.stop_reason == "end of sequence"
+    assert without_year.constrained.stop_reason == StopReason.END_OF_SEQUENCE
 
 
 def test_negated_class_disallows_the_excluded_characters():
@@ -147,7 +147,7 @@ def test_the_default_arithmetic_preset_lets_the_model_stop_right_after_the_answe
                          ARITHMETIC_STOPPABLE.inputs["Total apples"], 20)
 
     assert result.constrained.text == "3 +2 = 5"
-    assert result.constrained.stop_reason == "end of sequence"
+    assert result.constrained.stop_reason == StopReason.END_OF_SEQUENCE
     assert list(GRAMMAR_PRESETS.values())[0] is ARITHMETIC_STOPPABLE
 
 

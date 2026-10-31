@@ -1,15 +1,14 @@
 """The step trace view: a reusable Streamlit component for any constrained run (tabs ①–④).
 
-Call ``show_trace(run, model, key="t1")`` with a constrained ``Run`` and the model it ran on.
+Call ``show_trace(run, model, key="grammar")`` with a constrained ``Run`` and the model it ran on.
 ``key`` must be unique per tab so the widgets don't clash.
 """
 
 import pandas as pd
 import streamlit as st
 
-from grammar_lab.decoding import TOP_K, Run, Step
 from grammar_lab.model_boundary import ModelBoundary
-from grammar_lab.pipelines import exact_count
+from grammar_lab.pipelines import TOP_K, Run, Step, exact_count
 
 
 def _before_table(step: Step) -> pd.DataFrame:

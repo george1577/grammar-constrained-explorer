@@ -65,8 +65,8 @@ notebook's own code as a read-only snippet.
 Every click produces the same kind of result:
 
 - the **unconstrained run** (no grammar) next to the **grammar-constrained** run, with
-  ✅ *complete* (the output fully matches the root rule) or ⚠️ *incomplete output* (it hit the
-  token limit first);
+  ✅ *complete* (the output fully matches the root rule and the model stopped by itself) or
+  ⚠️ *incomplete output* (it hit the token limit, even if the output so far happens to match);
 - a **step trace** of the constrained run:
   - buttons for the steps where the mask changed the model's top choice (click one to jump there);
   - a step slider;
@@ -118,11 +118,12 @@ mask changed the top choice: for *Cholera*, step 2 shows ` García` at 99.7% mar
 **You provide:** the book-record regex from the notebook's Outlines example (editable), an input
 (*Cholera* or *Tirukkural*), and a maximum number of new tokens.
 
-**What happens when you click *Generate both runs*:**
+**As you edit the regex** (no click needed): it is converted into a GBNF grammar with one rule,
+`root` (`grammar_lab/regex.py`), shown next to the regex. Anchors, lookarounds and backreferences
+are rejected with a clear error in its place, and *Generate both runs* is disabled until it's fixed.
 
-1. The regex is converted into a GBNF grammar with one rule, `root` (`grammar_lab/regex.py`).
-   Anchors, lookarounds and backreferences are rejected with a clear error.
-2. From there it's exactly tab ①: the same two runs and the same engine.
+**What happens when you click *Generate both runs*:** from there it's exactly tab ①: the same two
+runs and the same engine.
 
 **What you see:** the **generated grammar (GBNF)** next to the regex, then the same results and
 step trace as tab ①. The regex puts a space on both sides of `|`, so the year is written as
@@ -195,7 +196,8 @@ trace_view.py               The step trace component, shared by all four tabs.
 grammar_lab/
   lm.py                     Loads the model; tokenizer view; KV-cached next-token scores. The only file that touches torch.
   model_boundary.py         The interface everything else uses: a TokenizerView and start(prompt) -> next_scores.
-  pipelines.py              One entry point per tab: run_grammar, run_regex, run_json_mode, run_structured.
+  pipelines.py              One entry point per tab (run_grammar, run_regex, run_json_mode, run_structured), live
+                            previews for tabs ②–④ (preview_regex, preview_json_mode, preview_schema). The UI's only door into grammar_lab.
   gbnf.py                   Parses GBNF-subset text into a grammar, with located error messages.
   recognizer.py             Character-level incremental recognizer: valid prefix? complete? what comes next?
   utf8.py                   Checks byte-level tokens (which can hold part of a character) against the grammar.

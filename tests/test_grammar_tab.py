@@ -1,31 +1,8 @@
 """Tab ① (grammar-constrained generation) through its pipeline entry point, with a fake model."""
 
-from grammar_lab.pipelines import run_grammar
+from grammar_lab.pipelines import StopReason, run_grammar
 from grammar_lab.presets import BOOK_RECORD
-from tests.fakes import FakeModel
-
-CHOLERA_SCRIPT = [
-    ["Gabriel"],
-    [" García", " Garcia"],
-    [" Márquez", " Marquez"],
-    [" |"],
-    [" Love"], [" in"], [" the"], [" Time"], [" of"], [" Cholera"],
-    [" |"],
-    ["1985"],
-    ["\n"],  # the model would keep going; the grammar is already complete
-    [" The"],
-]
-
-
-def run_book(model, paragraph="Cholera", max_new_tokens=50):
-    return run_grammar(
-        model,
-        grammar=BOOK_RECORD.grammar,
-        root=BOOK_RECORD.root,
-        system_prompt=BOOK_RECORD.system_prompt,
-        user_text=BOOK_RECORD.inputs[paragraph],
-        max_new_tokens=max_new_tokens,
-    )
+from tests.fakes import CHOLERA_SCRIPT, TIRUKKURAL_SCRIPT, FakeModel, run_book
 
 
 def test_grammar_wins_over_accented_tokens_the_model_prefers():
@@ -34,14 +11,6 @@ def test_grammar_wins_over_accented_tokens_the_model_prefers():
     assert result.unconstrained.text.startswith("Gabriel García Márquez | Love")
     assert result.constrained.text == "Gabriel Garcia Marquez | Love in the Time of Cholera |1985"
     assert result.complete
-
-
-TIRUKKURAL_SCRIPT = [
-    ["<eos>", "<|im_start|>", "Valluvar"],  # wants to stop before writing anything
-    [" |"], [" The"], [" Tirukkural"], [" |"],
-    ["<eos>", "<|im_start|>", "", "NULL"],  # wants to stop with the year still missing
-    ["<eos>"],
-]
 
 
 def test_end_of_sequence_and_special_tokens_are_disallowed_until_the_output_is_complete():
@@ -58,7 +27,7 @@ def test_end_of_sequence_is_allowed_once_the_output_fully_matches_the_root_rule(
                          system_prompt="Who wrote it?", user_text="The Tirukkural", max_new_tokens=10)
 
     assert result.constrained.text == "Valluvar"
-    assert result.constrained.stop_reason == "end of sequence"
+    assert result.constrained.stop_reason == StopReason.END_OF_SEQUENCE
     assert result.complete
 
 
@@ -66,14 +35,14 @@ def test_output_at_the_token_limit_is_incomplete():
     result = run_book(FakeModel(CHOLERA_SCRIPT), max_new_tokens=3)
 
     assert result.constrained.text == "Gabriel Garcia Marquez"
-    assert result.constrained.stop_reason == "token limit"
+    assert result.constrained.stop_reason == StopReason.TOKEN_LIMIT
     assert not result.complete
 
 
 def test_generation_stops_when_the_grammar_is_complete_and_nothing_more_can_follow():
     result = run_book(FakeModel(CHOLERA_SCRIPT))
 
-    assert result.constrained.stop_reason == "grammar complete"
+    assert result.constrained.stop_reason == StopReason.GRAMMAR_COMPLETE
     assert len(result.constrained.token_ids) == 12  # "1985" is token 12; the "\n" after it never comes
 
 

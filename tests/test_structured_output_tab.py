@@ -2,7 +2,7 @@
 
 import pytest
 
-from grammar_lab.pipelines import run_structured
+from grammar_lab.pipelines import StopReason, run_structured
 from grammar_lab.presets import INVOICE
 from tests.fakes import EOS, IM_START, FakeModel
 
@@ -191,7 +191,7 @@ def test_with_whitespace_unlimited_a_required_field_can_trap_the_model_in_a_whit
                             INVOICE.inputs["Clients (€43)"], max_new_tokens=30, limit_whitespace=False)
 
     assert result.constrained.text == '{"purpose": "taxi", "amount": 32.30' + "\n" * 16
-    assert result.constrained.stop_reason == "token limit"
+    assert result.constrained.stop_reason == StopReason.TOKEN_LIMIT
     assert not result.complete
     assert "ws     ::= [ \\t\\n]*" in result.grammar_text
 

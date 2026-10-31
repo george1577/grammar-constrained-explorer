@@ -5,10 +5,12 @@ elements, where an element is either a CharClass (match one character) or the in
 a rule (expand it). Groups and repeats become generated helper rules, e.g. ``x*`` becomes
 ``R ::= x R | (empty)``.
 
-A ``GrammarPosition`` is the set of every way the text so far can sit inside the grammar.
-Each way is a stack of frames ``(alternative, next element index)``; the top frame always
-points at a character element, or the stack is empty, meaning the root rule is complete.
-Calls in tail position replace their caller's frame, so ``R ::= x R`` does not grow the stack.
+A ``GrammarPosition`` is the set of every *way* the text so far can sit inside the grammar.
+Each way is a tuple of *open rules*, outermost first, each held as ``(alternative, next element
+index)``. The innermost open rule always points at a character element; an empty way means the
+root rule is complete. A rule reference that is the last element of its alternative (a tail call)
+replaces that open rule instead of nesting inside it, so ``R ::= x R`` does not grow the way. That
+is why the trace's "Open rules" can leave out a rule once its last element has been entered.
 """
 
 from dataclasses import dataclass
@@ -17,7 +19,8 @@ from typing import Optional
 from grammar_lab.gbnf import Alt, CharClass, Expr, Grammar, GrammarError, Literal, Repeat, RuleRef, Seq
 
 Element = CharClass | int  # a character to match, or a rule index to expand
-Stack = tuple[tuple[int, int], ...]
+OpenRule = tuple[int, int]      # (alternative, next element index)
+Way = tuple[OpenRule, ...]      # the open rules, outermost first
 
 
 @dataclass(frozen=True)
@@ -90,98 +93,98 @@ class CompiledGrammar:
         return required + optional
 
     def start(self) -> "GrammarPosition":
-        stacks: set[Stack] = set()
-        self._expand_rule(self.root, (), stacks, set())
-        return GrammarPosition(self, frozenset(stacks))
+        ways: set[Way] = set()
+        self._expand_rule(self.root, (), ways, set())
+        return GrammarPosition(self, frozenset(ways))
 
-    # ---- closure: expand rule references until every stack top is a character ------
+    # ---- closure: expand rule references until every way's innermost open rule is at a character ----
 
-    def _expand_rule(self, rule: int, rest: Stack, out: set[Stack], seen: set[Stack]):
+    def _expand_rule(self, rule: int, rest: Way, out: set[Way], seen: set[Way]):
         for alt in self.rule_alternatives[rule]:
             self._closure(rest + ((alt, 0),), out, seen)
 
-    def _closure(self, stack: Stack, out: set[Stack], seen: set[Stack]):
-        if stack in seen:
+    def _closure(self, way: Way, out: set[Way], seen: set[Way]):
+        if way in seen:
             return
-        seen.add(stack)
-        if not stack:
-            out.add(stack)
+        seen.add(way)
+        if not way:
+            out.add(way)
             return
-        alt, i = stack[-1]
+        alt, i = way[-1]
         elements = self.alternatives[alt].elements
         if i == len(elements):  # this alternative is finished: return to the caller
-            self._closure(stack[:-1], out, seen)
+            self._closure(way[:-1], out, seen)
             return
         element = elements[i]
         if isinstance(element, CharClass):
-            out.add(stack)
+            out.add(way)
             return
-        rest = stack[:-1] + ((alt, i + 1),) if i + 1 < len(elements) else stack[:-1]
+        rest = way[:-1] + ((alt, i + 1),) if i + 1 < len(elements) else way[:-1]
         self._expand_rule(element, rest, out, seen)
 
-    def step(self, stacks: frozenset[Stack], char: str) -> frozenset[Stack]:
-        out: set[Stack] = set()
-        seen: set[Stack] = set()
-        for stack in stacks:
-            if not stack:
+    def step(self, ways: frozenset[Way], char: str) -> frozenset[Way]:
+        out: set[Way] = set()
+        seen: set[Way] = set()
+        for way in ways:
+            if not way:
                 continue
-            alt, i = stack[-1]
+            alt, i = way[-1]
             if self.alternatives[alt].elements[i].matches(char):
-                self._closure(stack[:-1] + ((alt, i + 1),), out, seen)
+                self._closure(way[:-1] + ((alt, i + 1),), out, seen)
         return frozenset(out)
 
 
 class GrammarPosition:
     """Where the output so far sits in the grammar. Immutable; advancing returns a new one."""
 
-    def __init__(self, grammar: CompiledGrammar, stacks: frozenset[Stack]):
+    def __init__(self, grammar: CompiledGrammar, ways: frozenset[Way]):
         self._grammar = grammar
-        self.stacks = stacks
-        self._after_char: dict[str, frozenset[Stack]] = {}
+        self.ways = ways
+        self._after_char: dict[str, frozenset[Way]] = {}
 
     def advance(self, text: str) -> Optional["GrammarPosition"]:
         """The position after appending ``text``, or None if that breaks the grammar."""
         if not text:
             return self
-        stacks = self._after_char.get(text[0])
-        if stacks is None:
-            stacks = self._after_char[text[0]] = self._grammar.step(self.stacks, text[0])
+        ways = self._after_char.get(text[0])
+        if ways is None:
+            ways = self._after_char[text[0]] = self._grammar.step(self.ways, text[0])
         for char in text[1:]:
-            if not stacks:
+            if not ways:
                 break
-            stacks = self._grammar.step(stacks, char)
-        return GrammarPosition(self._grammar, stacks) if stacks else None
+            ways = self._grammar.step(ways, char)
+        return GrammarPosition(self._grammar, ways) if ways else None
 
     @property
     def is_complete(self) -> bool:
         """Does the output so far fully match the root rule?"""
-        return () in self.stacks
+        return () in self.ways
 
     @property
     def can_continue(self) -> bool:
         """Could any more characters follow?"""
-        return any(self.stacks)
+        return any(self.ways)
 
     def next_classes(self) -> list[CharClass]:
         """The character classes the next character must match (any one of them), in grammar order."""
         alternatives = self._grammar.alternatives
-        tops = sorted({stack[-1] for stack in self.stacks if stack})
-        return list(dict.fromkeys(alternatives[alt].elements[i] for alt, i in tops))
+        innermost = sorted({way[-1] for way in self.ways if way})
+        return list(dict.fromkeys(alternatives[alt].elements[i] for alt, i in innermost))
 
     def describe(self) -> "PositionView":
         """Which rules are open and what characters may come next, for display."""
         alternatives = self._grammar.alternatives
-        paths: dict[str, tuple[int, int]] = {}  # rule path -> earliest stack top, for grammar order
-        for stack in self.stacks:
-            if not stack:
+        paths: dict[str, tuple[int, int]] = {}  # rule path -> earliest innermost open rule, for grammar order
+        for way in self.ways:
+            if not way:
                 continue
             names: list[str] = []
-            for alt, _ in stack:
+            for alt, _ in way:
                 name = alternatives[alt].rule.split("/")[0]  # helpers like "author/*" belong to `author`
                 if not names or names[-1] != name:
                     names.append(name)
             path = " › ".join(names)
-            paths[path] = min(paths.get(path, stack[-1]), stack[-1])
+            paths[path] = min(paths.get(path, way[-1]), way[-1])
         return PositionView(
             open_rules=sorted(paths, key=paths.__getitem__),
             next_chars=list(dict.fromkeys(show_char_class(c) for c in self.next_classes())),
