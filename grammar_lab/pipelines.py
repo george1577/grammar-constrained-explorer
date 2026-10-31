@@ -3,7 +3,8 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from grammar_lab.decoding import Run, generate
+from grammar_lab import decoding
+from grammar_lab.decoding import ExactCount, Run, Step, generate
 from grammar_lab.gbnf import GrammarError, parse_gbnf
 from grammar_lab.model_boundary import ModelBoundary
 from grammar_lab.recognizer import start_position
@@ -19,6 +20,11 @@ class GrammarRunResult:
     def complete(self) -> bool:
         """✅ complete (the constrained output fully matches the root rule) or ⚠️ incomplete."""
         return bool(self.constrained and self.constrained.complete)
+
+
+def exact_count(model: ModelBoundary, step: Step) -> ExactCount:
+    """On demand, for one recorded step: how many tokens of the full vocabulary the grammar allows."""
+    return decoding.exact_count(model.tokenizer, step)
 
 
 def chat_messages(system_prompt: str, user_text: str) -> list[dict]:

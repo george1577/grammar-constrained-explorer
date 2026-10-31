@@ -2,7 +2,7 @@
 
 import pytest
 
-from grammar_lab.pipelines import run_grammar
+from grammar_lab.pipelines import exact_count, run_grammar
 from grammar_lab.presets import BOOK_RECORD
 from tests.fakes import FakeModel
 from tests.test_grammar_tab import CHOLERA_SCRIPT, TIRUKKURAL_SCRIPT, run_book
@@ -82,3 +82,27 @@ def test_the_first_character_pre_filter_changes_nothing_but_speed(paragraph, scr
     with_filter, without_filter = run(True), run(False)
     assert with_filter.text == without_filter.text
     assert with_filter.steps == without_filter.steps  # same top-10s, flags, probabilities and counts
+
+
+def test_exact_count_reports_allowed_and_disallowed_tokens_across_the_full_vocabulary():
+    model = FakeModel(CHOLERA_SCRIPT)
+    step = run_book(model).constrained.steps[1]  # after "Gabriel", inside `author`
+
+    count = exact_count(model, step)
+
+    # Disallowed: <eos>, <|im_start|>, " García", " Márquez", "1985", "198", "5", "\n" and the empty token.
+    assert (count.allowed, count.disallowed) == (18, 9)
+
+
+@pytest.mark.parametrize("paragraph, script", [("Cholera", CHOLERA_SCRIPT), ("Tirukkural", TIRUKKURAL_SCRIPT)])
+def test_exact_count_agrees_with_the_token_by_token_check_at_every_step(paragraph, script):
+    model = FakeModel(script)
+    run = run_book(model, paragraph=paragraph).constrained
+
+    for step in run.steps:
+        count = exact_count(model, step)
+        assert count.allowed + count.disallowed == len(model.tokenizer.token_texts)
+        assert all((c.token_id in count.allowed_ids) == c.allowed for c in step.before)
+        assert {c.token_id for c in step.after} <= count.allowed_ids
+        first_allowed_before = next(c for c in step.before if c.token_id in count.allowed_ids)
+        assert step.chosen.token_id == first_allowed_before.token_id

@@ -91,6 +91,19 @@ def check_token(token_id: int, position: GrammarPosition, tokens: TokenizerView)
     return position.advance(text)
 
 
+@dataclass(frozen=True)
+class ExactCount:
+    allowed: int
+    disallowed: int
+    allowed_ids: frozenset[int]
+
+
+def exact_count(tokens: TokenizerView, step: Step) -> ExactCount:
+    """Check every token in the vocabulary at this step's grammar position (no pre-filter, no early stop)."""
+    allowed = frozenset(i for i in range(len(tokens.token_texts)) if check_token(i, step.position, tokens) is not None)
+    return ExactCount(len(allowed), len(tokens.token_texts) - len(allowed), allowed)
+
+
 class FirstCharFilter:
     """A first-character pre-filter over the vocabulary.
 
