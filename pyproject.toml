@@ -1,0 +1,22 @@
+[project]
+name = "grammar-constrained-explorer"
+version = "0.1.0"
+description = "Interactive Streamlit app for seeing how a grammar limits which tokens an LLM may produce"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "streamlit>=1.40",
+    "torch>=2.5",
+    "transformers>=4.46",
+    "pandas>=2.2",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

@@ -1,0 +1,228 @@
+"""Greedy decoding, with or without a grammar.
+
+With a grammar, each step walks the candidates from the highest logit down, checking each
+one, until TOP_K *allowed tokens* (ones that keep the output a valid prefix of the grammar)
+have been found. The first allowed token is chosen. Special tokens are never allowed, except
+end-of-sequence once the output fully matches the root rule. Every step is recorded as a
+``Step`` so the trace view can show why each token was chosen.
+"""
+
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Optional
+
+from grammar_lab.model_boundary import ModelBoundary, NextTokenScores, TokenizerView
+from grammar_lab.recognizer import GrammarPosition, PositionView
+from grammar_lab.utf8 import Utf8Position, split_utf8
+
+
+
+class StopReason(StrEnum):
+    """Why a run stopped. The value is the text the app shows."""
+    END_OF_SEQUENCE = "end of sequence"
+    GRAMMAR_COMPLETE = "grammar complete"   # complete and nothing more can follow
+    TOKEN_LIMIT = "token limit"
+    NO_ALLOWED_TOKEN = "no allowed token"
+
+
+TOP_K = 10  # tokens shown before and after the mask
+
+
+@dataclass(frozen=True)
+class TokenChoice:
+    token_id: int
+    text: str       # the token's text, or a special token's name
+    prob: float     # before the mask: over the whole vocabulary; after: renormalised over the allowed top-k
+    allowed: bool
+
+    @property
+    def shown(self) -> str:
+        """The token with visible whitespace: " 3" is shown as "␣3", a newline as "⏎"."""
+        return visible_token(self.text)
+
+
+def visible_token(text: str) -> str:
+    if not text:
+        return "∅"
+    return text.replace(" ", "␣").replace("\n", "⏎").replace("\t", "⇥").replace("\r", "↵")
+
+
+@dataclass
+class Step:
+    """One decoding step of a constrained run."""
+    before: list[TokenChoice]   # top-k by logit, allowed or not
+    after: list[TokenChoice]    # top-k allowed tokens, renormalised
+    checked: int                # tokens checked before top-k allowed ones were found
+    disallowed: int             # of those, how many were disallowed
+    position: Utf8Position = field(repr=False, compare=False)  # the grammar position checked against
+
+    @property
+    def chosen(self) -> Optional[TokenChoice]:
+        return self.after[0] if self.after else None
+
+    @property
+    def mask_changed_top(self) -> bool:
+        """Was the model's top choice disallowed, so the mask changed what was written?"""
+        return bool(self.before) and not self.before[0].allowed
+
+    @property
+    def grammar_position(self) -> PositionView:
+        """Which rules were open and what could come next, before this step's token."""
+        return self.position.describe()
+
+
+@dataclass
+class Run:
+    token_ids: list[int]
+    text: str
+    stop_reason: StopReason
+    complete: Optional[bool] = None  # constrained runs only: matches the root rule without hitting the token limit?
+    steps: list[Step] = field(default_factory=list)  # constrained runs only
+
+    @property
+    def mask_changed_steps(self) -> list[int]:
+        """Indexes of the steps where the model's top choice was disallowed."""
+        return [i for i, step in enumerate(self.steps) if step.mask_changed_top]
+
+
+def check_token(token_id: int, position: Utf8Position, tokens: TokenizerView) -> Optional[Utf8Position]:
+    """The grammar position after this token, or None if the token is disallowed.
+
+    Tokens are checked as bytes, so one holding part of a multi-byte character is judged by the
+    characters it can still become (see utf8.py). End-of-sequence, when allowed, returns the
+    unchanged position.
+    """
+    if token_id in tokens.eos_ids:
+        return position if position.is_complete else None
+    data = tokens.bytes_of(token_id)
+    if token_id in tokens.special_ids or not data:
+        return None
+    return position.advance_bytes(data)
+
+
+@dataclass(frozen=True)
+class ExactCount:
+    allowed: int
+    disallowed: int
+    allowed_ids: frozenset[int]
+
+
+def exact_count(tokens: TokenizerView, step: Step) -> ExactCount:
+    """Check every token in the vocabulary at this step's grammar position (no pre-filter, no early stop)."""
+    allowed = frozenset(i for i in range(len(tokens.token_texts)) if check_token(i, step.position, tokens) is not None)
+    return ExactCount(len(allowed), len(tokens.token_texts) - len(allowed), allowed)
+
+
+class FirstCharFilter:
+    """A first-character pre-filter over the vocabulary.
+
+    At a grammar position, a token can only be allowed if its first character matches one of the
+    character classes expected next; any other token is disallowed without walking it through the
+    grammar. Answers are remembered per (expected classes, first character), so across a run each
+    first character is tested once per kind of position. Special tokens, tokens that don't start
+    with a whole character, and every token in the middle of an unfinished character go through
+    the full check.
+    """
+
+    def __init__(self, tokens: TokenizerView):
+        self._tokens = tokens
+        self._memo: dict[tuple, dict[str, bool]] = {}  # expected classes -> first char -> may pass
+        self._first_chars: dict[int, Optional[str]] = {}  # token id -> its first whole character
+
+    def _first_char(self, token_id: int) -> Optional[str]:
+        if token_id not in self._first_chars:
+            split = split_utf8(self._tokens.bytes_of(token_id))
+            self._first_chars[token_id] = split[0][0] if split and split[0] else None
+        return self._first_chars[token_id]
+
+    def for_position(self, position: Utf8Position):
+        """A ``might_allow(token_id)`` test for this position: False means surely disallowed."""
+        if position.pending:
+            return lambda token_id: True
+        expected = tuple(position.next_classes())
+        seen = self._memo.setdefault(expected, {})
+        special = self._tokens.special_ids
+
+        def might_allow(token_id: int) -> bool:
+            if token_id in special:
+                return True  # leave these to the full check
+            first = self._first_char(token_id)
+            if first is None:
+                return True
+            if first not in seen:
+                seen[first] = any(c.matches(first) for c in expected)
+            return seen[first]
+
+        return might_allow
+
+
+def constrained_step(scores: NextTokenScores, position: Utf8Position, tokens: TokenizerView,
+                     prefilter: Optional[FirstCharFilter] = None):
+    """Check tokens from the highest logit down until TOP_K allowed ones are found.
+
+    Returns the recorded Step and the position after its chosen token (None if nothing is allowed).
+    """
+    before: list[TokenChoice] = []
+    allowed: list[tuple[int, Utf8Position]] = []
+    checked = 0
+    might_allow = prefilter.for_position(position) if prefilter else None
+    for token_id in scores.ranked_ids():
+        if len(allowed) == TOP_K:  # then at least TOP_K were checked, so `before` is full too
+            break
+        if might_allow is not None and not might_allow(token_id):
+            after = None
+        else:
+            after = check_token(token_id, position, tokens)
+        checked += 1
+        if len(before) < TOP_K:
+            before.append(TokenChoice(token_id, tokens.name_of(token_id), scores.prob(token_id), after is not None))
+        if after is not None:
+            allowed.append((token_id, after))
+    total = sum(scores.prob(i) for i, _ in allowed)
+    after_mask = [TokenChoice(i, tokens.name_of(i), scores.prob(i) / total, True) for i, _ in allowed]
+    step = Step(before, after_mask, checked, checked - len(allowed), position)
+    return step, (allowed[0][1] if allowed else None)
+
+
+def generate(model: ModelBoundary, prompt_ids: list[int], max_new_tokens: int,
+             position: Optional[GrammarPosition] = None, prefilter: bool = True) -> Run:
+    """Greedy generation; constrained by the grammar when a start position is given.
+
+    ``prefilter`` turns the first-character pre-filter on or off; it changes speed, not results.
+    """
+    tokens = model.tokenizer
+    constrained = position is not None
+    if constrained:
+        position = Utf8Position(position)  # tokens are checked as bytes
+    first_char_filter = FirstCharFilter(tokens) if constrained and prefilter else None
+    next_scores = model.start(prompt_ids)
+    generated: list[int] = []
+    prev = None
+    stop = StopReason.TOKEN_LIMIT
+    steps: list[Step] = []
+    for _ in range(max_new_tokens):
+        scores = next_scores(prev)
+        if constrained:
+            step, next_position = constrained_step(scores, position, tokens, first_char_filter)
+            steps.append(step)
+            if step.chosen is None:
+                stop = StopReason.NO_ALLOWED_TOKEN
+                break
+            chosen, position = step.chosen.token_id, next_position
+        else:
+            chosen = scores.ranked_ids()[0]
+        if chosen in tokens.eos_ids:
+            stop = StopReason.END_OF_SEQUENCE
+            break
+        generated.append(chosen)
+        prev = chosen
+        if constrained and position.is_complete and not position.can_continue:
+            stop = StopReason.GRAMMAR_COMPLETE
+            break
+
+    if constrained:
+        # Stopping at the token limit is always incomplete, even if the output happens to match
+        # the root rule: the model never chose to end (e.g. a whitespace loop).
+        complete = position.is_complete and stop != StopReason.TOKEN_LIMIT
+        return Run(generated, tokens.text_of(generated), stop, complete=complete, steps=steps)
+    return Run(generated, tokens.decode(generated), stop)
