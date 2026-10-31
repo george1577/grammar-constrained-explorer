@@ -8,16 +8,22 @@ end-of-sequence once the output fully matches the root rule. Every step is recor
 """
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Optional
 
 from grammar_lab.model_boundary import ModelBoundary, NextTokenScores, TokenizerView
 from grammar_lab.recognizer import GrammarPosition, PositionView
 from grammar_lab.utf8 import Utf8Position, split_utf8
 
-END_OF_SEQUENCE = "end of sequence"
-GRAMMAR_COMPLETE = "grammar complete"   # complete and nothing more can follow
-TOKEN_LIMIT = "token limit"
-NO_ALLOWED_TOKEN = "no allowed token"
+
+
+class StopReason(StrEnum):
+    """Why a run stopped. The value is the text the app shows."""
+    END_OF_SEQUENCE = "end of sequence"
+    GRAMMAR_COMPLETE = "grammar complete"   # complete and nothing more can follow
+    TOKEN_LIMIT = "token limit"
+    NO_ALLOWED_TOKEN = "no allowed token"
+
 
 TOP_K = 10  # tokens shown before and after the mask
 
@@ -69,8 +75,8 @@ class Step:
 class Run:
     token_ids: list[int]
     text: str
-    stop_reason: str
-    complete: Optional[bool] = None  # constrained runs only: does the output match the root rule?
+    stop_reason: StopReason
+    complete: Optional[bool] = None  # constrained runs only: matches the root rule without hitting the token limit?
     steps: list[Step] = field(default_factory=list)  # constrained runs only
 
     @property
@@ -192,7 +198,7 @@ def generate(model: ModelBoundary, prompt_ids: list[int], max_new_tokens: int,
     next_scores = model.start(prompt_ids)
     generated: list[int] = []
     prev = None
-    stop = TOKEN_LIMIT
+    stop = StopReason.TOKEN_LIMIT
     steps: list[Step] = []
     for _ in range(max_new_tokens):
         scores = next_scores(prev)
@@ -200,20 +206,23 @@ def generate(model: ModelBoundary, prompt_ids: list[int], max_new_tokens: int,
             step, next_position = constrained_step(scores, position, tokens, first_char_filter)
             steps.append(step)
             if step.chosen is None:
-                stop = NO_ALLOWED_TOKEN
+                stop = StopReason.NO_ALLOWED_TOKEN
                 break
             chosen, position = step.chosen.token_id, next_position
         else:
             chosen = scores.ranked_ids()[0]
         if chosen in tokens.eos_ids:
-            stop = END_OF_SEQUENCE
+            stop = StopReason.END_OF_SEQUENCE
             break
         generated.append(chosen)
         prev = chosen
         if constrained and position.is_complete and not position.can_continue:
-            stop = GRAMMAR_COMPLETE
+            stop = StopReason.GRAMMAR_COMPLETE
             break
 
     if constrained:
-        return Run(generated, tokens.text_of(generated), stop, complete=position.is_complete, steps=steps)
+        # Stopping at the token limit is always incomplete, even if the output happens to match
+        # the root rule: the model never chose to end (e.g. a whitespace loop).
+        complete = position.is_complete and stop != StopReason.TOKEN_LIMIT
+        return Run(generated, tokens.text_of(generated), stop, complete=complete, steps=steps)
     return Run(generated, tokens.decode(generated), stop)

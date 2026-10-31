@@ -27,7 +27,7 @@ Where the output generated so far sits within the grammar: which rules are still
 _Avoid_: Parser state, cursor
 
 **Open rule**:
-A rule that the output has started but not yet finished at the current grammar position.
+A rule that the output has started but not yet finished at the current grammar position. A rule whose last element has been entered may no longer be listed: when that element is a rule reference (a tail call, as in `name ::= [a-z] name?`), the referenced rule takes its place, so repeats don't pile up as ever-deeper open rules.
 _Avoid_: Active rule, stack frame
 
 ### Model output
@@ -67,11 +67,11 @@ Setting the logits of disallowed tokens to negative infinity before the token is
 _Avoid_: Filter, block
 
 **Complete output**:
-Constrained output that fully matches the root rule (shown as ✅). It can still have stopped at the token limit, if the grammar allows more text and the model never chose end-of-sequence.
+Constrained output that fully matches the root rule and stopped without hitting the token limit: the model chose end-of-sequence, or the grammar allowed nothing more (shown as ✅).
 _Avoid_: Valid output, success
 
 **Incomplete output**:
-Constrained output that hit the token limit before fully matching the root rule (shown as ⚠️).
+Constrained output that hit the token limit (shown as ⚠️). This includes output that happens to match the root rule when the limit is reached, as in a whitespace loop: the model never chose to stop.
 _Avoid_: Truncated, failed
 
 **Unconstrained run**:

@@ -4,8 +4,7 @@ import pytest
 
 from grammar_lab.pipelines import exact_count, run_grammar
 from grammar_lab.presets import BOOK_RECORD
-from tests.fakes import FakeModel
-from tests.test_grammar_tab import CHOLERA_SCRIPT, TIRUKKURAL_SCRIPT, run_book
+from tests.fakes import CHOLERA_SCRIPT, TIRUKKURAL_SCRIPT, FakeModel, run_book
 
 
 def texts(choices):

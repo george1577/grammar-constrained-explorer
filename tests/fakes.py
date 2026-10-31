@@ -1,4 +1,5 @@
-"""A fake tokenizer view and fake model, so tests never download a real model.
+"""A fake tokenizer view and fake model, so tests never download a real model, plus the
+book-record scripts shared by the grammar-tab and step-trace tests.
 
 The fake model ignores the text so far: at step i it ranks the tokens listed in
 ``script[i]`` first (in that order), then every other token in vocabulary order.
@@ -6,6 +7,8 @@ That lets a test say "the model wants X here" and check whether the grammar lets
 """
 
 from grammar_lab.model_boundary import ListScores, TokenizerView
+from grammar_lab.pipelines import run_grammar
+from grammar_lab.presets import BOOK_RECORD
 
 EOS = "<eos>"
 IM_START = "<|im_start|>"
@@ -67,3 +70,37 @@ class FakeModel:
             return ListScores(logits)
 
         return next_scores
+
+
+# ---- tab ①'s book-record preset, shared by the grammar-tab and step-trace tests ----
+
+CHOLERA_SCRIPT = [
+    ["Gabriel"],
+    [" García", " Garcia"],
+    [" Márquez", " Marquez"],
+    [" |"],
+    [" Love"], [" in"], [" the"], [" Time"], [" of"], [" Cholera"],
+    [" |"],
+    ["1985"],
+    ["\n"],  # the model would keep going; the grammar is already complete
+    [" The"],
+]
+
+
+def run_book(model, paragraph="Cholera", max_new_tokens=50):
+    return run_grammar(
+        model,
+        grammar=BOOK_RECORD.grammar,
+        root=BOOK_RECORD.root,
+        system_prompt=BOOK_RECORD.system_prompt,
+        user_text=BOOK_RECORD.inputs[paragraph],
+        max_new_tokens=max_new_tokens,
+    )
+
+
+TIRUKKURAL_SCRIPT = [
+    ["<eos>", "<|im_start|>", "Valluvar"],  # wants to stop before writing anything
+    [" |"], [" The"], [" Tirukkural"], [" |"],
+    ["<eos>", "<|im_start|>", "", "NULL"],  # wants to stop with the year still missing
+    ["<eos>"],
+]

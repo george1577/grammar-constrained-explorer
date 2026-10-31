@@ -1,6 +1,6 @@
 """Tab ③ (JSON mode) through its pipeline entry point, with a fake model."""
 
-from grammar_lab.pipelines import run_json_mode
+from grammar_lab.pipelines import StopReason, run_json_mode
 from grammar_lab.presets import JSON_BOOK
 from tests.fakes import EOS, IM_START, FakeModel
 
@@ -28,7 +28,7 @@ def test_json_mode_lets_the_model_choose_its_own_keys_and_write_the_string_null(
 
     assert result.constrained.text == '{"writer": "Valluvar", "year": "NULL"}'
     assert result.complete
-    assert result.constrained.stop_reason == "end of sequence"
+    assert result.constrained.stop_reason == StopReason.END_OF_SEQUENCE
 
 
 def test_the_model_cannot_start_with_anything_but_a_json_object():
@@ -48,15 +48,23 @@ def test_with_whitespace_unlimited_a_whitespace_favouring_model_loops_until_the_
     result = run_book_json(json_model(WHITESPACE_LOVER), limit_whitespace=False, max_new_tokens=40)
 
     assert result.constrained.text == "{}" + "\n" * 38
-    assert result.constrained.stop_reason == "token limit"
+    assert result.constrained.stop_reason == StopReason.TOKEN_LIMIT
     assert "ws     ::= [ \\t\\n]*" in result.grammar_text
+
+
+def test_a_run_that_matches_the_root_rule_but_stopped_at_the_token_limit_is_incomplete():
+    result = run_book_json(json_model(WHITESPACE_LOVER), limit_whitespace=False, max_new_tokens=40)
+
+    # "{}" plus trailing newlines does match the JSON grammar, but the model never chose to stop.
+    assert result.constrained.stop_reason == StopReason.TOKEN_LIMIT
+    assert not result.complete
 
 
 def test_with_whitespace_limited_the_same_model_cannot_loop_and_ends():
     result = run_book_json(json_model(WHITESPACE_LOVER), limit_whitespace=True, max_new_tokens=40)
 
     assert result.constrained.text == "{}\n"
-    assert result.constrained.stop_reason == "end of sequence"
+    assert result.constrained.stop_reason == StopReason.END_OF_SEQUENCE
     assert result.complete
     third = result.constrained.steps[3]  # a second newline is disallowed, so end-of-sequence wins
     assert [(c.text, c.allowed) for c in third.before[:2]] == [("\n", False), (EOS, True)]

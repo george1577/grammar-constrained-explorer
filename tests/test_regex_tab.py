@@ -2,7 +2,7 @@
 
 import pytest
 
-from grammar_lab.pipelines import run_grammar, run_regex
+from grammar_lab.pipelines import preview_regex, run_grammar, run_regex
 from grammar_lab.presets import BOOK_REGEX
 from tests.fakes import EOS, FakeModel
 
@@ -77,3 +77,13 @@ def test_dot_allows_anything_but_a_newline():
 
     assert result.grammar_text == "root ::= [^\\n]+\n"
     assert result.constrained.text == "Gabriel García"
+
+
+def test_the_generated_grammar_and_regex_errors_are_previewed_without_running_the_model():
+    preview = preview_regex(BOOK_REGEX.regex)
+    broken = preview_regex(r"^[a-z]+")
+
+    assert preview.grammar_text == run_book_regex(FakeModel(CHOLERA_SCRIPT)).grammar_text
+    assert preview.error is None and preview.constrained is None
+    assert broken.grammar_text is None
+    assert broken.error.column == 1 and "anchors" in str(broken.error)

@@ -131,6 +131,10 @@ For example, after `Gabriel Garcia` the trace shows:
   the text decides between them.
 - **May come next:** `[a-zA-Z ]` or `"|"`.
 
+A rule can drop out of *Open rules* before it is finished: once the output has entered its last
+element and that element is another rule (a tail call), only that rule is kept open. That's how a
+repeat such as `[a-zA-Z ]+` stays one open rule instead of nesting one level deeper per letter.
+
 An `í` can't come next, so any token containing one is disallowed.
 
 ### A real example: accents stripped (book record, *Cholera*)
