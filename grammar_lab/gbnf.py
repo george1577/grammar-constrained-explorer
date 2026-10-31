@@ -68,6 +68,13 @@ ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\", '"': '"', "[": "[", "]":
 
 REPEATS = {"*": (0, None), "+": (1, None), "?": (0, 1)}
 
+LITERAL_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\t": "\\t", "\r": "\\r"}
+
+
+def gbnf_literal(text: str) -> str:
+    """``text`` written as a quoted GBNF literal, for converters that generate grammars."""
+    return '"' + "".join(LITERAL_ESCAPES.get(c, c) for c in text) + '"'
+
 
 def parse_gbnf(text: str) -> Grammar:
     return _Parser(text).parse()

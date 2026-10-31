@@ -200,3 +200,84 @@ response = client.chat.completions.create(
 )
 return response.choices[0].message.content
 '''
+
+
+# ---- structured output (notebook 2b) ------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SchemaPreset:
+    name: str
+    system_prompt: str
+    schema: str              # JSON Schema text, editable in the app
+    inputs: dict[str, str]
+
+
+# Notebook 2b's Invoice dataclass written as JSON Schema: fields in the same order, `UKP` (not
+# `GBP`) as in the notebook, and `currency` left out of `required` because it has a default.
+INVOICE_SCHEMA = """{
+  "title": "Invoice",
+  "type": "object",
+  "properties": {
+    "purpose": {"type": "string"},
+    "amount": {"type": "number"},
+    "currency": {
+      "title": "CurrencyEnum",
+      "type": "string",
+      "enum": ["USD", "UKP", "INR", "EUR"],
+      "default": "USD"
+    }
+  },
+  "required": ["purpose", "amount"]
+}
+"""
+
+# Notebook 2b, parse_invoice_info (pydantic-ai). The prompt never mentions currency: it is
+# inferred from the schema alone.
+INVOICE = SchemaPreset(
+    name="Invoice",
+    system_prompt="""
+    You will be given a short snippet from an email that represents an invoice.
+    Extract the purpose and amount of the invoice.
+    """,
+    schema=INVOICE_SCHEMA,
+    inputs={
+        "Taxi ($32.30)": "\nRequesting reimbursement for taxi-ride to airport. I paid $32.30.\n",
+        "Clients (€43)": "\nI spent €43 entertaining our French clients.\n",
+        "Dinner (₹820)": "\nMy dinner at the airport cost ₹820\n",
+    },
+)
+
+SCHEMA_PRESETS = {INVOICE.name: INVOICE}
+
+PYDANTIC_AI_SNIPPET = '''from dataclasses import dataclass
+from enum import Enum
+from pydantic_ai import Agent
+from pydantic_ai.models.gemini import GeminiModel
+
+class CurrencyEnum(str, Enum):
+    USD = 'USD'
+    UKP = 'UKP'
+    INR = 'INR'
+    EUR = 'EUR'
+
+@dataclass
+class Invoice:
+    purpose: str
+    amount: float
+    currency: CurrencyEnum = CurrencyEnum.USD
+
+model = GeminiModel("gemini-1.5-flash", api_key=os.getenv('GEMINI_API_KEY'))
+
+def parse_invoice_info(paragraph: str) -> str:
+    system_prompt = """
+    You will be given a short snippet from an email that represents an invoice.
+    Extract the purpose and amount of the invoice.
+    """
+
+    agent = Agent(model,
+                  result_type=Invoice,
+                  system_prompt=system_prompt)
+
+    response = agent.run_sync(paragraph)
+    return response.data
+'''

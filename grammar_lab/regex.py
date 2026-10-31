@@ -16,7 +16,7 @@ backreferences, possessive quantifiers and inline flags.
 from dataclasses import dataclass
 from typing import Optional, Union
 
-from grammar_lab.gbnf import GrammarError
+from grammar_lab.gbnf import GrammarError, gbnf_literal
 
 ROOT = "root"
 
@@ -276,17 +276,17 @@ def _render_seq(node: Node) -> str:
             run.append(item.char)
             continue
         if run:
-            parts.append(_literal("".join(run)))
+            parts.append(gbnf_literal("".join(run)))
             run = []
         parts.append(_render_item(item))
     if run:
-        parts.append(_literal("".join(run)))
+        parts.append(gbnf_literal("".join(run)))
     return " ".join(parts) if parts else '""'
 
 
 def _render_item(node: Node) -> str:
     if isinstance(node, Char):
-        return _literal(node.char)
+        return gbnf_literal(node.char)
     if isinstance(node, Class):
         return _char_class(node)
     if isinstance(node, Alt):
@@ -308,13 +308,10 @@ def _render_repeat(node: Rep) -> str:
     return " ".join(copies) if copies else '""'
 
 
-LITERAL_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\t": "\\t", "\r": "\\r"}
 CLASS_ESCAPES = {"\\": "\\\\", "]": "\\]", "[": "\\[", "-": "\\-", "^": "\\^",
                  "\n": "\\n", "\t": "\\t", "\r": "\\r"}
 
 
-def _literal(text: str) -> str:
-    return '"' + "".join(LITERAL_ESCAPES.get(c, c) for c in text) + '"'
 
 
 def _char_class(node: Class) -> str:

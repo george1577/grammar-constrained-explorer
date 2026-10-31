@@ -20,6 +20,13 @@ char   ::= [^"\\\\\\n\\r\\t] | "\\\\" (["\\\\/bfnrt] | "u" hex hex hex hex)
 hex    ::= [0-9a-fA-F]
 """
 
+# The other JSON values, by type name (the schema converter adds only the ones it uses).
+NUMBER_RULES = {
+    "number": 'number ::= "-"? ("0" | [1-9] [0-9]*) ("." [0-9]+)? ([eE] [-+]? [0-9]+)? ws\n',
+    "integer": 'integer ::= "-"? ("0" | [1-9] [0-9]*) ws\n',
+    "boolean": 'boolean ::= ("true" | "false") ws\n',
+}
+
 
 def whitespace_rules(limit_whitespace: bool) -> str:
     return LIMITED_WS if limit_whitespace else UNLIMITED_WS
@@ -34,6 +41,6 @@ def json_gbnf(limit_whitespace: bool = True) -> str:
         'member ::= string ":" ws value\n'
         'array  ::= "[" ws (value ("," ws value)*)? "]" ws\n'
         + STRING_RULES
-        + 'number ::= "-"? ("0" | [1-9] [0-9]*) ("." [0-9]+)? ([eE] [-+]? [0-9]+)? ws\n'
+        + NUMBER_RULES["number"]
         + whitespace_rules(limit_whitespace)
     )
