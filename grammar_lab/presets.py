@@ -49,4 +49,34 @@ separator ::= "|"
     inputs={"Cholera": CHOLERA, "Tirukkural": TIRUKKURAL},
 )
 
-GRAMMAR_PRESETS = {BOOK_RECORD.name: BOOK_RECORD}
+# Notebook 1, get_expression_that_solves (transformers-cfg). The second question is the
+# "grammar too strict" lesson: the answer needs `>`, but the grammar only allows `=`.
+ARITHMETIC = GrammarPreset(
+    name="Arithmetic expression",
+    system_prompt="""
+    You are a math instructor. I will ask you a math question.
+    Respond with the mathematical expression that can be used to solve the problem.
+    """,
+    grammar="""root  ::= (expr "=" ws term "\\n")+
+expr  ::= term ([-+*/] term)*
+term  ::= ident | num | "(" ws expr ")" ws
+ident ::= [a-z] [a-z0-9_]* ws
+num   ::= [0-9]+ ws
+ws    ::= [ \\t\\n]*
+""",
+    root="root",
+    inputs={
+        "Total apples": """
+Bill has 3 apples and 2 oranges.
+Mae has 2 apples and 4 oranges.
+How many total apples do Bill and Mae have?
+""",
+        "More apples than oranges?": """
+Bill has 3 apples and 2 oranges.
+Mae has 2 apples and 4 oranges.
+Do Bill and Mae have more apples than oranges?
+""",
+    },
+)
+
+GRAMMAR_PRESETS = {p.name: p for p in (ARITHMETIC, BOOK_RECORD)}
