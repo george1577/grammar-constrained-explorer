@@ -133,3 +133,27 @@ def test_root_rule_choices_list_the_rules_in_order_even_while_the_grammar_is_bro
 
     assert rule_names(ARITHMETIC.grammar) == ["root", "expr", "term", "ident", "num", "ws"]
     assert rule_names('# comment\nrecord ::= author "|" (\nauthor-name ::= [a-z]*') == ["record", "author-name"]
+
+
+# Qwen wants to end right after "3 +2 = 5". The notebook grammar needs a newline after every
+# line, so end-of-sequence is disallowed there; the default preset puts newlines between lines.
+WANTS_TO_STOP_AFTER_THE_ANSWER = [["3"], [" +"], ["2"], [" ="], [" "], ["5"], [EOS, "\n"], [EOS]]
+
+
+def test_the_default_arithmetic_preset_lets_the_model_stop_right_after_the_answer():
+    from grammar_lab.presets import ARITHMETIC_STOPPABLE, GRAMMAR_PRESETS
+    result = run_grammar(arith(WANTS_TO_STOP_AFTER_THE_ANSWER), ARITHMETIC_STOPPABLE.grammar,
+                         ARITHMETIC_STOPPABLE.root, ARITHMETIC_STOPPABLE.system_prompt,
+                         ARITHMETIC_STOPPABLE.inputs["Total apples"], 20)
+
+    assert result.constrained.text == "3 +2 = 5"
+    assert result.constrained.stop_reason == "end of sequence"
+    assert list(GRAMMAR_PRESETS.values())[0] is ARITHMETIC_STOPPABLE
+
+
+def test_the_notebook_arithmetic_grammar_disallows_ending_before_the_newline():
+    result = run_arithmetic(arith(WANTS_TO_STOP_AFTER_THE_ANSWER), "Total apples", max_new_tokens=20)
+
+    step = result.constrained.steps[6]
+    assert [(c.text, c.allowed) for c in step.before[:2]] == [(EOS, False), ("\n", True)]
+    assert result.constrained.text == "3 +2 = 5\n"
