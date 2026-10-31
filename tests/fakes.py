@@ -21,29 +21,34 @@ VOCAB = [
 IDS = {text: i for i, text in enumerate(VOCAB)}
 
 
-def fake_tokenizer(prompts: list, vocab: list[str] = VOCAB) -> TokenizerView:
+def fake_tokenizer(prompts: list, vocab: list = VOCAB) -> TokenizerView:
     """``prompts`` collects every chat prompt built, so tests can see what was asked.
 
-    ``vocab`` must contain EOS and IM_START.
+    ``vocab`` must contain EOS and IM_START. An entry may be ``bytes`` instead of ``str``: a
+    byte-level token, possibly holding only part of a multi-byte UTF-8 character, as in
+    Qwen's tokenizer. Its text is then decoded the way a real tokenizer does, with "�".
     """
     ids = {text: i for i, text in enumerate(vocab)}
+    special = (EOS, IM_START)
+    raw = [b"" if t in special else (t if isinstance(t, bytes) else t.encode()) for t in vocab]
 
     def chat_prompt_ids(messages: list[dict]) -> list[int]:
         prompts.append(messages)
         return [ids[IM_START]]
 
     return TokenizerView(
-        token_texts=["" if t in (EOS, IM_START) else t for t in vocab],
+        token_texts=[data.decode("utf-8", errors="replace") for data in raw],
+        token_bytes=raw,
         special_ids=frozenset({ids[EOS], ids[IM_START]}),
         eos_ids=frozenset({ids[EOS]}),
         chat_prompt_ids=chat_prompt_ids,
         special_names={ids[EOS]: EOS, ids[IM_START]: IM_START},
-        decode=lambda token_ids: "".join(vocab[i] for i in token_ids if vocab[i] not in (EOS, IM_START)),
+        decode=lambda token_ids: b"".join(raw[i] for i in token_ids).decode("utf-8", errors="replace"),
     )
 
 
 class FakeModel:
-    def __init__(self, script: list[list[str]], vocab: list[str] = VOCAB):
+    def __init__(self, script: list[list], vocab: list = VOCAB):
         self.script = script
         self.vocab = vocab
         self.ids = {text: i for i, text in enumerate(vocab)}

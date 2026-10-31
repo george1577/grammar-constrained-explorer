@@ -41,6 +41,29 @@ class TensorScores:
         return float(self._probs[token_id])
 
 
+def byte_level_decoder() -> dict[str, int]:
+    """GPT-2 style byte-level BPE (used by Qwen) writes each byte as a printable character;
+    this maps those characters back to bytes."""
+    printable = list(range(ord("!"), ord("~") + 1)) + list(range(0xA1, 0xAD)) + list(range(0xAE, 0x100))
+    chars = printable[:]
+    extra = 0
+    for byte in range(256):
+        if byte not in printable:
+            printable.append(byte)
+            chars.append(256 + extra)
+            extra += 1
+    return {chr(c): b for b, c in zip(printable, chars)}
+
+
+def token_bytes(tokenizer, token_id: int, text: str, decoder: dict[str, int]) -> bytes:
+    """A token's raw bytes. For byte-level tokenizers these can be part of a multi-byte
+    character (whose decoded text is just "�"); otherwise they are the text's UTF-8."""
+    piece = tokenizer.convert_ids_to_tokens(token_id)
+    if isinstance(piece, str) and piece and all(c in decoder for c in piece):
+        return bytes(decoder[c] for c in piece)
+    return text.encode()
+
+
 def build_tokenizer_view(tokenizer, vocab_size: int, eos_ids: set[int]) -> TokenizerView:
     """Decode every token once. Ids past the tokenizer's vocabulary (padding rows of the
     model's output layer) and added tokens such as <|im_end|> count as special."""
@@ -50,6 +73,8 @@ def build_tokenizer_view(tokenizer, vocab_size: int, eos_ids: set[int]) -> Token
         "" if i in special else tokenizer.decode([i], clean_up_tokenization_spaces=False)
         for i in range(vocab_size)
     ]
+    decoder = byte_level_decoder()
+    raw = [b"" if i in special else token_bytes(tokenizer, i, texts[i], decoder) for i in range(vocab_size)]
 
     def chat_prompt_ids(messages: list[dict]) -> list[int]:
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -57,6 +82,7 @@ def build_tokenizer_view(tokenizer, vocab_size: int, eos_ids: set[int]) -> Token
 
     return TokenizerView(
         token_texts=texts,
+        token_bytes=raw,
         special_ids=frozenset(special),
         eos_ids=frozenset(eos_ids),
         chat_prompt_ids=chat_prompt_ids,

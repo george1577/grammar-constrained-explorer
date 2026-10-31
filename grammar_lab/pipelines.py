@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from grammar_lab import decoding
+from grammar_lab import decoding, json_grammar, json_schema
 from grammar_lab.decoding import ExactCount, Run, Step, generate
 from grammar_lab.gbnf import GrammarError, parse_gbnf
 from grammar_lab.model_boundary import ModelBoundary
@@ -17,7 +17,8 @@ class GrammarRunResult:
     constrained: Optional[Run] = None
     unconstrained: Optional[Run] = None
     error: Optional[GrammarError] = None  # set when the grammar (or regex) fails to parse
-    grammar_text: Optional[str] = None    # the GBNF actually used, when generated (regex tab)
+    grammar_text: Optional[str] = None    # the GBNF actually used, when generated (tabs ②–④)
+    dataclass_view: Optional[str] = None  # tab ④: the schema as read-only Python dataclasses
 
     @property
     def complete(self) -> bool:
@@ -61,6 +62,35 @@ def run_regex(model: ModelBoundary, regex: str, system_prompt: str, user_text: s
     result = run_grammar(model, grammar_text, ROOT, system_prompt, user_text, max_new_tokens)
     result.grammar_text = grammar_text
     return result
+
+
+def run_json_mode(model: ModelBoundary, system_prompt: str, user_text: str, limit_whitespace: bool = True,
+                  max_new_tokens: int = 256) -> GrammarRunResult:
+    """Tab ③: a grammar allowing any JSON object, so keys and value types are up to the model."""
+    grammar_text = json_grammar.json_gbnf(limit_whitespace)
+    result = run_grammar(model, grammar_text, json_grammar.ROOT, system_prompt, user_text, max_new_tokens)
+    result.grammar_text = grammar_text
+    return result
+
+
+def run_structured(model: ModelBoundary, schema: str, system_prompt: str, user_text: str,
+                   max_new_tokens: int = 256) -> GrammarRunResult:
+    """Tab ④: the JSON Schema is converted to GBNF (fields in order, all required), then decoded."""
+    preview = preview_schema(schema)
+    if preview.error:
+        return preview
+    result = run_grammar(model, preview.grammar_text, json_schema.ROOT, system_prompt, user_text, max_new_tokens)
+    result.grammar_text, result.dataclass_view = preview.grammar_text, preview.dataclass_view
+    return result
+
+
+def preview_schema(schema: str) -> GrammarRunResult:
+    """Tab ④ without running the model: the generated GBNF and dataclass view, or the schema error."""
+    try:
+        return GrammarRunResult(grammar_text=json_schema.schema_to_gbnf(schema),
+                                dataclass_view=json_schema.schema_to_dataclass(schema))
+    except GrammarError as error:
+        return GrammarRunResult(error=error)
 
 
 def rule_names(grammar: str) -> list[str]:

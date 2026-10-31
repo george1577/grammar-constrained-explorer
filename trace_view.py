@@ -68,7 +68,7 @@ def show_trace(run: Run, model: ModelBoundary, key: str):
     last = len(run.steps) - 1
     index = st.slider("Step", 0, last, key=slider_key) if last > 0 else 0
     step = run.steps[index]
-    written = "".join(c.text for c in (s.chosen for s in run.steps[:index]) if c)
+    written = model.tokenizer.text_of(run.token_ids[:index])  # bytes joined, so split characters come out whole
     st.markdown("Output so far: " + (f"`{written.replace(chr(10), '⏎')}`" if written else "(nothing yet)"))
 
     st.caption(

@@ -7,10 +7,13 @@ from pathlib import Path
 
 import streamlit as st
 
-from grammar_lab.decoding import Run
+from grammar_lab.decoding import TOKEN_LIMIT, Run
+from grammar_lab.json_grammar import json_gbnf
 from grammar_lab.lm import MODELS, LanguageModel
-from grammar_lab.pipelines import GrammarRunResult, rule_names, run_grammar, run_regex
-from grammar_lab.presets import GRAMMAR_PRESETS, OUTLINES_SNIPPET, REGEX_PRESETS, TRANSFORMERS_CFG_SNIPPET
+from grammar_lab.pipelines import (GrammarRunResult, preview_schema, rule_names, run_grammar, run_json_mode, run_regex,
+                                  run_structured)
+from grammar_lab.presets import (GRAMMAR_PRESETS, JSON_PRESETS, OPENAI_JSON_MODE_SNIPPET, OUTLINES_SNIPPET,
+                                 PYDANTIC_AI_SNIPPET, REGEX_PRESETS, SCHEMA_PRESETS, TRANSFORMERS_CFG_SNIPPET)
 from trace_view import show_trace
 
 st.set_page_config(page_title="Grammar-Constrained Explorer", page_icon="🧩", layout="wide")
@@ -18,7 +21,7 @@ st.set_page_config(page_title="Grammar-Constrained Explorer", page_icon="🧩", 
 # Results kept in session_state are grammar_lab objects. When that code changes while the app is
 # running, Streamlit reloads it but old results keep their old shape. So drop stored results
 # whenever the code changes.
-RESULT_KEYS = ("t1", "t2")
+RESULT_KEYS = ("t1", "t2", "t3", "t4")
 
 
 def code_version() -> str:
@@ -47,6 +50,9 @@ def show_run(title: str, run: Run, constrained: bool):
     if constrained:
         if run.complete:
             st.success("✅ Complete: the output fully matches the root rule.")
+            if run.stop_reason == TOKEN_LIMIT:
+                st.caption("…but the model never chose to stop: it kept writing until the token limit "
+                           "(for example, a whitespace loop).")
         else:
             st.warning(f"⚠️ Incomplete output: stopped ({run.stop_reason}) before matching the root rule.")
     st.caption(f"{len(run.token_ids)} tokens · stopped: {run.stop_reason}")
@@ -80,7 +86,8 @@ with st.sidebar:
     lm = get_model(model_id)
     st.caption(f"Running on **{lm.device}** (set `GCE_DEVICE` to change)")
 
-tab1, tab2 = st.tabs(["① Grammar-constrained generation", "② Regex constraint"])
+tab1, tab2, tab3, tab4 = st.tabs(["① Grammar-constrained generation", "② Regex constraint", "③ JSON mode",
+                                  "④ Structured output"])
 
 # ---- tab ①: GBNF grammar ------------------------------------------------------------
 
@@ -170,3 +177,116 @@ with tab2:
         st.code(OUTLINES_SNIPPET, language="python")
         st.caption("The notebook's `convert_message_to_prompt` has no `return`; `return prompt` is added "
                    "here. Its cell has no saved output.")
+
+# ---- tab ③: JSON mode ---------------------------------------------------------------------
+
+with tab3:
+    st.header("③ JSON mode")
+    st.markdown(
+        "JSON mode is a grammar too: one that allows **any** valid JSON object. The output is "
+        "guaranteed to parse, but the grammar says nothing about which keys appear or what type each "
+        "value has. Only the prompt asks for `author`, `title` and `year`."
+    )
+    jpreset = JSON_PRESETS[st.selectbox("Preset (from notebook 2a)", list(JSON_PRESETS), key="t3_preset")]
+    left, right = st.columns([2, 1])
+    with left:
+        input_name = st.radio("Input", list(jpreset.inputs), horizontal=True, key=f"t3_input_{jpreset.name}")
+        user_text = st.text_area("Input text", jpreset.inputs[input_name], height=130,
+                                 key=f"t3_text_{jpreset.name}_{input_name}")
+    with right:
+        limit_whitespace = st.toggle(
+            "Limit whitespace", value=True, key="t3_limit_ws",
+            help="On: each gap allows at most one space, or one newline plus a short indent. Off: unlimited "
+                 "whitespace, so a model that keeps choosing newlines or spaces can loop until the token limit.")
+        max_new_tokens = st.slider("Max new tokens", 10, 256, 96, key="t3_max")
+    with st.expander("System prompt (from the notebook)"):
+        system_prompt = st.text_area("System prompt", jpreset.system_prompt, height=130,
+                                     key=f"t3_system_{jpreset.name}", label_visibility="collapsed")
+    with st.expander("Generated JSON grammar (GBNF)"):
+        st.code(json_gbnf(limit_whitespace), language=None, wrap_lines=True)
+    st.info(
+        "**Keys and value types are not controlled.** Inside an object the grammar allows any string as a "
+        "key and any JSON value after it, so the model may pick its own keys (`writer` instead of "
+        "`author`) or write the string `\"NULL\"` where JSON's `null` was meant. JSON strings allow any "
+        "character, so accents such as \"García Márquez\" survive here, unlike tab ①'s `[a-zA-Z ]`. "
+        "Whitespace is optional everywhere in JSON: turn **Limit whitespace** off to watch a model that "
+        "favours newlines or spaces keep writing them, because the grammar never forces it to stop."
+    )
+
+    if st.button("Generate both runs", type="primary", key="t3_go"):
+        with st.spinner("Generating without and with the JSON grammar…"):
+            st.session_state.t3 = run_json_mode(lm, system_prompt, user_text, limit_whitespace, max_new_tokens)
+
+    res = st.session_state.get("t3")
+    if res:
+        show_results(res, res.grammar_text)
+        show_trace(res.constrained, lm, key="t3")
+
+    with st.expander("The same thing in the notebook (OpenAI JSON mode)"):
+        st.code(OPENAI_JSON_MODE_SNIPPET, language="python")
+        st.caption("The notebook sends the system prompt with role `developer`, OpenAI's newer name for "
+                   "`system`; this app sends it as `system`.")
+
+# ---- tab ④: structured output ---------------------------------------------------------------
+
+with tab4:
+    st.header("④ Structured output")
+    st.markdown(
+        "Structured output is a grammar built from a schema. Each object's keys are spelled out in "
+        "schema order and each value must have the field's type, so the model only fills in the "
+        "values. Enums become literal alternatives: only their values can be written."
+    )
+    spreset = SCHEMA_PRESETS[st.selectbox("Preset (from notebook 2b)", list(SCHEMA_PRESETS), key="t4_preset")]
+    left, right = st.columns([2, 1])
+    with left:
+        input_name = st.radio("Input", list(spreset.inputs), horizontal=True, key=f"t4_input_{spreset.name}")
+        user_text = st.text_area("Input text", spreset.inputs[input_name], height=100,
+                                 key=f"t4_text_{spreset.name}_{input_name}")
+    with right:
+        max_new_tokens = st.slider("Max new tokens", 10, 256, 64, key="t4_max")
+    with st.expander("System prompt (from the notebook)"):
+        system_prompt = st.text_area("System prompt", spreset.system_prompt, height=110,
+                                     key=f"t4_system_{spreset.name}", label_visibility="collapsed")
+
+    scol, vcol = st.columns(2)
+    with scol:
+        schema = st.text_area(
+            "JSON Schema", spreset.schema, height=380, key=f"t4_schema_{spreset.name}",
+            help="Supported: type object, string, number, integer or boolean; properties; required; enum; "
+                 "nested objects; and title, description and default.")
+    preview = preview_schema(schema)
+    with vcol:
+        if preview.error:
+            st.markdown("**Schema error**")
+            show_error(preview.error, schema)
+        else:
+            view_tab, gbnf_tab = st.tabs(["Python dataclass view", "Generated grammar (GBNF)"])
+            with view_tab:
+                st.code(preview.dataclass_view, language="python")
+                st.caption("Read-only: the schema as notebook 2b's kind of dataclass.")
+            with gbnf_tab:
+                st.code(preview.grammar_text, language=None, wrap_lines=True)
+    st.info(
+        "**Why is a field with a default still required, and why are fields in schema order?** A grammar "
+        "either allows a key at a position or it doesn't. Writing every field, in the order the schema "
+        "lists them, gives one simple sequence of keys. Letting fields be left out, or come in any order, "
+        "would multiply the alternatives the grammar has to spell out. So `currency` must be written even "
+        "though it defaults to `USD`, and `purpose` always comes first. The model has to infer the "
+        "currency, since the system prompt never mentions it. Field order also matters for quality: "
+        "the model writes earlier fields first and can use them when choosing later ones."
+    )
+
+    if st.button("Generate both runs", type="primary", key="t4_go", disabled=bool(preview.error)):
+        with st.spinner("Converting the schema and generating without and with it…"):
+            st.session_state.t4 = (schema, run_structured(lm, schema, system_prompt, user_text, max_new_tokens))
+
+    if "t4" in st.session_state:
+        used_schema, res = st.session_state.t4
+        show_results(res, used_schema if res.error else res.grammar_text)
+        if not res.error:
+            show_trace(res.constrained, lm, key="t4")
+
+    with st.expander("The same thing in the notebook (pydantic-ai + Gemini)"):
+        st.code(PYDANTIC_AI_SNIPPET, language="python")
+        st.caption("pydantic-ai 0.0.53 as in the notebook: later versions renamed `result_type=` to "
+                   "`output_type=` and `response.data` to `response.output`.")
