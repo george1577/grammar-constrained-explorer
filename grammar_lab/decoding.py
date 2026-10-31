@@ -12,6 +12,7 @@ from typing import Optional
 
 from grammar_lab.model_boundary import ModelBoundary, NextTokenScores, TokenizerView
 from grammar_lab.recognizer import GrammarPosition, PositionView
+from grammar_lab.utf8 import Utf8Position, split_utf8
 
 END_OF_SEQUENCE = "end of sequence"
 GRAMMAR_COMPLETE = "grammar complete"   # complete and nothing more can follow
@@ -47,7 +48,7 @@ class Step:
     after: list[TokenChoice]    # top-k allowed tokens, renormalised
     checked: int                # tokens checked before top-k allowed ones were found
     disallowed: int             # of those, how many were disallowed
-    position: GrammarPosition = field(repr=False, compare=False)  # the grammar position checked against
+    position: Utf8Position = field(repr=False, compare=False)  # the grammar position checked against
 
     @property
     def chosen(self) -> Optional[TokenChoice]:
@@ -78,17 +79,19 @@ class Run:
         return [i for i, step in enumerate(self.steps) if step.mask_changed_top]
 
 
-def check_token(token_id: int, position: GrammarPosition, tokens: TokenizerView) -> Optional[GrammarPosition]:
+def check_token(token_id: int, position: Utf8Position, tokens: TokenizerView) -> Optional[Utf8Position]:
     """The grammar position after this token, or None if the token is disallowed.
 
-    End-of-sequence, when allowed, returns the unchanged position.
+    Tokens are checked as bytes, so one holding part of a multi-byte character is judged by the
+    characters it can still become (see utf8.py). End-of-sequence, when allowed, returns the
+    unchanged position.
     """
     if token_id in tokens.eos_ids:
         return position if position.is_complete else None
-    text = tokens.token_texts[token_id]
-    if token_id in tokens.special_ids or not text:
+    data = tokens.bytes_of(token_id)
+    if token_id in tokens.special_ids or not data:
         return None
-    return position.advance(text)
+    return position.advance_bytes(data)
 
 
 @dataclass(frozen=True)
@@ -110,24 +113,36 @@ class FirstCharFilter:
     At a grammar position, a token can only be allowed if its first character matches one of the
     character classes expected next; any other token is disallowed without walking it through the
     grammar. Answers are remembered per (expected classes, first character), so across a run each
-    first character is tested once per kind of position. Special tokens go through the full check.
+    first character is tested once per kind of position. Special tokens, tokens that don't start
+    with a whole character, and every token in the middle of an unfinished character go through
+    the full check.
     """
 
     def __init__(self, tokens: TokenizerView):
         self._tokens = tokens
         self._memo: dict[tuple, dict[str, bool]] = {}  # expected classes -> first char -> may pass
+        self._first_chars: dict[int, Optional[str]] = {}  # token id -> its first whole character
 
-    def for_position(self, position: GrammarPosition):
+    def _first_char(self, token_id: int) -> Optional[str]:
+        if token_id not in self._first_chars:
+            split = split_utf8(self._tokens.bytes_of(token_id))
+            self._first_chars[token_id] = split[0][0] if split and split[0] else None
+        return self._first_chars[token_id]
+
+    def for_position(self, position: Utf8Position):
         """A ``might_allow(token_id)`` test for this position: False means surely disallowed."""
+        if position.pending:
+            return lambda token_id: True
         expected = tuple(position.next_classes())
         seen = self._memo.setdefault(expected, {})
-        texts, special = self._tokens.token_texts, self._tokens.special_ids
+        special = self._tokens.special_ids
 
         def might_allow(token_id: int) -> bool:
-            text = texts[token_id]
-            if token_id in special or not text:
+            if token_id in special:
                 return True  # leave these to the full check
-            first = text[0]
+            first = self._first_char(token_id)
+            if first is None:
+                return True
             if first not in seen:
                 seen[first] = any(c.matches(first) for c in expected)
             return seen[first]
@@ -135,14 +150,14 @@ class FirstCharFilter:
         return might_allow
 
 
-def constrained_step(scores: NextTokenScores, position: GrammarPosition, tokens: TokenizerView,
+def constrained_step(scores: NextTokenScores, position: Utf8Position, tokens: TokenizerView,
                      prefilter: Optional[FirstCharFilter] = None):
     """Check tokens from the highest logit down until TOP_K allowed ones are found.
 
     Returns the recorded Step and the position after its chosen token (None if nothing is allowed).
     """
     before: list[TokenChoice] = []
-    allowed: list[tuple[int, GrammarPosition]] = []
+    allowed: list[tuple[int, Utf8Position]] = []
     checked = 0
     might_allow = prefilter.for_position(position) if prefilter else None
     for token_id in scores.ranked_ids():
@@ -171,6 +186,8 @@ def generate(model: ModelBoundary, prompt_ids: list[int], max_new_tokens: int,
     """
     tokens = model.tokenizer
     constrained = position is not None
+    if constrained:
+        position = Utf8Position(position)  # tokens are checked as bytes
     first_char_filter = FirstCharFilter(tokens) if constrained and prefilter else None
     next_scores = model.start(prompt_ids)
     generated: list[int] = []
