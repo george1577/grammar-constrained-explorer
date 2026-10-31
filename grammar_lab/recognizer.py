@@ -78,7 +78,16 @@ class CompiledGrammar:
                 self.alternatives.append(Alternative(helper_name, elements))
                 self.rule_alternatives[helper].append(len(self.alternatives) - 1)
             return required + (helper,)
-        raise NotImplementedError("bounded repeats are not supported yet")
+        # up to (max - min) optional copies, each R ::= item | (empty)
+        optional: tuple[Element, ...] = ()
+        for _ in range(expr.max - expr.min):
+            helper_name = f"{name}/?"
+            helper = self._new_rule(helper_name)
+            for elements in (item, ()):
+                self.alternatives.append(Alternative(helper_name, elements))
+                self.rule_alternatives[helper].append(len(self.alternatives) - 1)
+            optional += (helper,)
+        return required + optional
 
     def start(self) -> "GrammarPosition":
         stacks: set[Stack] = set()
