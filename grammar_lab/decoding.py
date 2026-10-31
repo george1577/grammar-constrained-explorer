@@ -91,7 +91,36 @@ def check_token(token_id: int, position: GrammarPosition, tokens: TokenizerView)
     return position.advance(text)
 
 
-def constrained_step(scores: NextTokenScores, position: GrammarPosition, tokens: TokenizerView):
+class FirstCharFilter:
+    """A first-character pre-filter over the vocabulary.
+
+    Tokens are grouped by their first character once. At a grammar position, only tokens whose
+    first character matches one of the character classes expected next can be allowed, so every
+    other token is disallowed without walking it through the grammar. End-of-sequence always
+    goes through the full check.
+    """
+
+    def __init__(self, tokens: TokenizerView):
+        self._tokens = tokens
+        by_first: dict[str, list[int]] = {}
+        for token_id, text in enumerate(tokens.token_texts):
+            if text and token_id not in tokens.special_ids:
+                by_first.setdefault(text[0], []).append(token_id)
+        self._by_first = by_first
+        self._candidates: dict[tuple, frozenset[int]] = {}
+
+    def candidates(self, position: GrammarPosition) -> frozenset[int]:
+        """Token ids that might be allowed at this position: everything else surely is not."""
+        expected = tuple(position.next_classes())
+        if expected not in self._candidates:
+            ids = {i for first, group in self._by_first.items() if any(c.matches(first) for c in expected)
+                   for i in group}
+            self._candidates[expected] = frozenset(ids | self._tokens.eos_ids)
+        return self._candidates[expected]
+
+
+def constrained_step(scores: NextTokenScores, position: GrammarPosition, tokens: TokenizerView,
+                     prefilter: Optional[FirstCharFilter] = None):
     """Check tokens from the highest logit down until TOP_K allowed ones are found.
 
     Returns the recorded Step and the position after its chosen token (None if nothing is allowed).
@@ -99,10 +128,14 @@ def constrained_step(scores: NextTokenScores, position: GrammarPosition, tokens:
     before: list[TokenChoice] = []
     allowed: list[tuple[int, GrammarPosition]] = []
     checked = 0
+    candidates = prefilter.candidates(position) if prefilter else None
     for token_id in scores.ranked_ids():
         if len(allowed) == TOP_K:  # then at least TOP_K were checked, so `before` is full too
             break
-        after = check_token(token_id, position, tokens)
+        if candidates is not None and token_id not in candidates:
+            after = None
+        else:
+            after = check_token(token_id, position, tokens)
         checked += 1
         if len(before) < TOP_K:
             before.append(TokenChoice(token_id, tokens.name_of(token_id), scores.prob(token_id), after is not None))
@@ -115,10 +148,14 @@ def constrained_step(scores: NextTokenScores, position: GrammarPosition, tokens:
 
 
 def generate(model: ModelBoundary, prompt_ids: list[int], max_new_tokens: int,
-             position: Optional[GrammarPosition] = None) -> Run:
-    """Greedy generation; constrained by the grammar when a start position is given."""
+             position: Optional[GrammarPosition] = None, prefilter: bool = True) -> Run:
+    """Greedy generation; constrained by the grammar when a start position is given.
+
+    ``prefilter`` turns the first-character pre-filter on or off; it changes speed, not results.
+    """
     tokens = model.tokenizer
     constrained = position is not None
+    first_char_filter = FirstCharFilter(tokens) if constrained and prefilter else None
     next_scores = model.start(prompt_ids)
     generated: list[int] = []
     prev = None
@@ -127,7 +164,7 @@ def generate(model: ModelBoundary, prompt_ids: list[int], max_new_tokens: int,
     for _ in range(max_new_tokens):
         scores = next_scores(prev)
         if constrained:
-            step, next_position = constrained_step(scores, position, tokens)
+            step, next_position = constrained_step(scores, position, tokens, first_char_filter)
             steps.append(step)
             if step.chosen is None:
                 stop = NO_ALLOWED_TOKEN

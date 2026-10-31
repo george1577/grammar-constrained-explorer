@@ -5,7 +5,7 @@ import pytest
 from grammar_lab.pipelines import run_grammar
 from grammar_lab.presets import BOOK_RECORD
 from tests.fakes import FakeModel
-from tests.test_grammar_tab import CHOLERA_SCRIPT, run_book
+from tests.test_grammar_tab import CHOLERA_SCRIPT, TIRUKKURAL_SCRIPT, run_book
 
 
 def texts(choices):
@@ -71,3 +71,14 @@ def test_whitespace_and_newlines_inside_tokens_are_shown_visibly():
     assert shown == ["⏎", "␣", "Valluvar"]
     first_step = run_book(FakeModel(CHOLERA_SCRIPT)).constrained.steps[1]
     assert [c.shown for c in first_step.after[3:6]] == ["␣|", "|", "|␣"]  # " |", "|" and "| " can be told apart
+
+
+@pytest.mark.parametrize("paragraph, script", [("Cholera", CHOLERA_SCRIPT), ("Tirukkural", TIRUKKURAL_SCRIPT)])
+def test_the_first_character_pre_filter_changes_nothing_but_speed(paragraph, script):
+    def run(prefilter):
+        return run_grammar(FakeModel(script), BOOK_RECORD.grammar, BOOK_RECORD.root, BOOK_RECORD.system_prompt,
+                           BOOK_RECORD.inputs[paragraph], max_new_tokens=50, prefilter=prefilter).constrained
+
+    with_filter, without_filter = run(True), run(False)
+    assert with_filter.text == without_filter.text
+    assert with_filter.steps == without_filter.steps  # same top-10s, flags, probabilities and counts
