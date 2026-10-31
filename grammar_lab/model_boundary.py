@@ -10,8 +10,9 @@ Two parts:
 Nothing outside ``lm.py`` imports torch.
 """
 
-from dataclasses import dataclass
-from typing import Callable, Optional, Protocol, Sequence
+import math
+from dataclasses import dataclass, field
+from typing import Callable, Mapping, Optional, Protocol, Sequence
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,13 @@ class TokenizerView:
     eos_ids: frozenset[int]             # end-of-sequence ids (a subset of special_ids)
     chat_prompt_ids: Callable[[list[dict]], list[int]]
     decode: Callable[[list[int]], str]  # proper detokenisation, skipping special tokens
+    special_names: Mapping[int, str] = field(default_factory=dict)  # e.g. 151645 -> "<|im_end|>", for display
+
+    def name_of(self, token_id: int) -> str:
+        """Text for showing a token: its decoded text, or the special token's name."""
+        if token_id in self.special_ids:
+            return self.special_names.get(token_id, f"<special {token_id}>")
+        return self.token_texts[token_id]
 
     def text_of(self, token_ids: list[int]) -> str:
         """The output exactly as the grammar saw it: the tokens' texts joined together."""
@@ -34,6 +42,9 @@ class NextTokenScores(Protocol):
         """Every token id, highest logit first."""
 
     def logit(self, token_id: int) -> float: ...
+
+    def prob(self, token_id: int) -> float:
+        """Softmax probability over the whole vocabulary."""
 
 
 NextScoresFn = Callable[[Optional[int]], NextTokenScores]
@@ -52,6 +63,8 @@ class ListScores:
     def __init__(self, logits: Sequence[float]):
         self._logits = list(logits)
         self._ranked: Optional[list[int]] = None
+        top = max(self._logits)
+        self._log_total = top + math.log(sum(math.exp(x - top) for x in self._logits))
 
     def ranked_ids(self) -> list[int]:
         if self._ranked is None:
@@ -60,3 +73,6 @@ class ListScores:
 
     def logit(self, token_id: int) -> float:
         return self._logits[token_id]
+
+    def prob(self, token_id: int) -> float:
+        return math.exp(self._logits[token_id] - self._log_total)

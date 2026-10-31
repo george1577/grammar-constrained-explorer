@@ -25,6 +25,7 @@ class TensorScores:
     def __init__(self, logits: torch.Tensor):
         self._logits = logits
         self._ranked: Optional[list[int]] = None
+        self._probs: Optional[torch.Tensor] = None
 
     def ranked_ids(self) -> list[int]:
         if self._ranked is None:
@@ -33,6 +34,11 @@ class TensorScores:
 
     def logit(self, token_id: int) -> float:
         return float(self._logits[token_id])
+
+    def prob(self, token_id: int) -> float:
+        if self._probs is None:
+            self._probs = torch.softmax(self._logits, dim=-1)
+        return float(self._probs[token_id])
 
 
 def build_tokenizer_view(tokenizer, vocab_size: int, eos_ids: set[int]) -> TokenizerView:
@@ -55,6 +61,8 @@ def build_tokenizer_view(tokenizer, vocab_size: int, eos_ids: set[int]) -> Token
         eos_ids=frozenset(eos_ids),
         chat_prompt_ids=chat_prompt_ids,
         decode=lambda ids: tokenizer.decode(ids, skip_special_tokens=True),
+        special_names={i: (tokenizer.convert_ids_to_tokens(i) if i < len(tokenizer) else None) or f"<pad {i}>"
+                       for i in special},
     )
 
 
