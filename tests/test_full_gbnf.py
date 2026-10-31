@@ -114,3 +114,15 @@ def test_an_unclosed_group_gives_a_located_error():
 
     assert (result.error.line, result.error.column) == (2, 10)
     assert "never closed" in str(result.error)
+
+
+def test_arithmetic_runs_use_the_notebook_system_prompt_and_questions():
+    model = arith([[EOS]])
+    run_arithmetic(model, "Total apples", max_new_tokens=1)
+    run_arithmetic(model, "More apples than oranges?", max_new_tokens=1)
+
+    system, user = model.prompts[0]
+    assert "You are a math instructor." in system["content"]
+    assert "Respond with the mathematical expression" in system["content"]
+    assert user["content"].endswith("How many total apples do Bill and Mae have?\n")
+    assert model.prompts[1][1]["content"].endswith("Do Bill and Mae have more apples than oranges?\n")

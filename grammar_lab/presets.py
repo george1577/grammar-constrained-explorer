@@ -80,3 +80,21 @@ Do Bill and Mae have more apples than oranges?
 )
 
 GRAMMAR_PRESETS = {p.name: p for p in (ARITHMETIC, BOOK_RECORD)}
+
+
+@dataclass(frozen=True)
+class RegexPreset:
+    name: str
+    system_prompt: str
+    regex: str
+    inputs: dict[str, str]
+
+
+# Notebook 1, the Outlines version of parse_book_info. Unlike the GBNF: `+` (not `*`) and
+# a bar with a space on each side.
+BOOK_REGEX = RegexPreset(
+    name="Book record (author | title | year)",
+    system_prompt=BOOK_RECORD.system_prompt,
+    regex=r"([a-zA-Z ]+|NULL) \| ([a-zA-Z ]+|NULL) \| ([1-2][0-9][0-9][0-9]|NULL)",
+    inputs={"Cholera": CHOLERA, "Tirukkural": TIRUKKURAL},
+)
