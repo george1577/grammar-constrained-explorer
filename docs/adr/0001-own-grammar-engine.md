@@ -1,0 +1,3 @@
+# Own grammar engine instead of transformers-cfg or Outlines
+
+The app's purpose is to show *why* each token is allowed or disallowed, including the grammar position after every step. `transformers-cfg`, Outlines and llguidance compute exact masks quickly, but their internal state is a black box. So all four tabs use one small GBNF-subset parser and recognizer that we wrote ourselves. Regexes, JSON mode and schemas are each converted into a grammar first, which makes it visible that they are all the same mechanism. We accept that it is slower and only supports a subset of GBNF, because seeing inside matters more than speed here.
