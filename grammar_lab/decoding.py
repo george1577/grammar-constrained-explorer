@@ -107,29 +107,32 @@ def exact_count(tokens: TokenizerView, step: Step) -> ExactCount:
 class FirstCharFilter:
     """A first-character pre-filter over the vocabulary.
 
-    Tokens are grouped by their first character once. At a grammar position, only tokens whose
-    first character matches one of the character classes expected next can be allowed, so every
-    other token is disallowed without walking it through the grammar. End-of-sequence always
-    goes through the full check.
+    At a grammar position, a token can only be allowed if its first character matches one of the
+    character classes expected next; any other token is disallowed without walking it through the
+    grammar. Answers are remembered per (expected classes, first character), so across a run each
+    first character is tested once per kind of position. Special tokens go through the full check.
     """
 
     def __init__(self, tokens: TokenizerView):
         self._tokens = tokens
-        by_first: dict[str, list[int]] = {}
-        for token_id, text in enumerate(tokens.token_texts):
-            if text and token_id not in tokens.special_ids:
-                by_first.setdefault(text[0], []).append(token_id)
-        self._by_first = by_first
-        self._candidates: dict[tuple, frozenset[int]] = {}
+        self._memo: dict[tuple, dict[str, bool]] = {}  # expected classes -> first char -> may pass
 
-    def candidates(self, position: GrammarPosition) -> frozenset[int]:
-        """Token ids that might be allowed at this position: everything else surely is not."""
+    def for_position(self, position: GrammarPosition):
+        """A ``might_allow(token_id)`` test for this position: False means surely disallowed."""
         expected = tuple(position.next_classes())
-        if expected not in self._candidates:
-            ids = {i for first, group in self._by_first.items() if any(c.matches(first) for c in expected)
-                   for i in group}
-            self._candidates[expected] = frozenset(ids | self._tokens.eos_ids)
-        return self._candidates[expected]
+        seen = self._memo.setdefault(expected, {})
+        texts, special = self._tokens.token_texts, self._tokens.special_ids
+
+        def might_allow(token_id: int) -> bool:
+            text = texts[token_id]
+            if token_id in special or not text:
+                return True  # leave these to the full check
+            first = text[0]
+            if first not in seen:
+                seen[first] = any(c.matches(first) for c in expected)
+            return seen[first]
+
+        return might_allow
 
 
 def constrained_step(scores: NextTokenScores, position: GrammarPosition, tokens: TokenizerView,
@@ -141,11 +144,11 @@ def constrained_step(scores: NextTokenScores, position: GrammarPosition, tokens:
     before: list[TokenChoice] = []
     allowed: list[tuple[int, GrammarPosition]] = []
     checked = 0
-    candidates = prefilter.candidates(position) if prefilter else None
+    might_allow = prefilter.for_position(position) if prefilter else None
     for token_id in scores.ranked_ids():
         if len(allowed) == TOP_K:  # then at least TOP_K were checked, so `before` is full too
             break
-        if candidates is not None and token_id not in candidates:
+        if might_allow is not None and not might_allow(token_id):
             after = None
         else:
             after = check_token(token_id, position, tokens)

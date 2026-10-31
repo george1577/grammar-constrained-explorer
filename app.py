@@ -11,6 +11,7 @@ from grammar_lab.decoding import Run
 from grammar_lab.lm import MODELS, LanguageModel
 from grammar_lab.pipelines import run_grammar
 from grammar_lab.presets import BOOK_RECORD
+from trace_view import show_trace
 
 st.set_page_config(page_title="Grammar-Constrained Explorer", page_icon="🧩", layout="wide")
 
@@ -99,3 +100,4 @@ with tab1:
                 show_run("Unconstrained run", res.unconstrained, constrained=False)
             with c2:
                 show_run("Grammar-constrained", res.constrained, constrained=True)
+            show_trace(res.constrained, lm, key="t1")
