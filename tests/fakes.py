@@ -37,6 +37,7 @@ def fake_tokenizer(prompts: list, vocab: list[str] = VOCAB) -> TokenizerView:
         special_ids=frozenset({ids[EOS], ids[IM_START]}),
         eos_ids=frozenset({ids[EOS]}),
         chat_prompt_ids=chat_prompt_ids,
+        special_names={ids[EOS]: EOS, ids[IM_START]: IM_START},
         decode=lambda token_ids: "".join(vocab[i] for i in token_ids if vocab[i] not in (EOS, IM_START)),
     )
 

@@ -162,6 +162,60 @@ class GrammarPosition:
         """Could any more characters follow?"""
         return any(self.stacks)
 
+    def next_classes(self) -> list[CharClass]:
+        """The character classes the next character must match (any one of them), in grammar order."""
+        alternatives = self._grammar.alternatives
+        tops = sorted({stack[-1] for stack in self.stacks if stack})
+        return list(dict.fromkeys(alternatives[alt].elements[i] for alt, i in tops))
+
+    def describe(self) -> "PositionView":
+        """Which rules are open and what characters may come next, for display."""
+        alternatives = self._grammar.alternatives
+        paths: dict[str, tuple[int, int]] = {}  # rule path -> earliest stack top, for grammar order
+        for stack in self.stacks:
+            if not stack:
+                continue
+            names: list[str] = []
+            for alt, _ in stack:
+                name = alternatives[alt].rule.split("/")[0]  # helpers like "author/*" belong to `author`
+                if not names or names[-1] != name:
+                    names.append(name)
+            path = " › ".join(names)
+            paths[path] = min(paths.get(path, stack[-1]), stack[-1])
+        return PositionView(
+            open_rules=sorted(paths, key=paths.__getitem__),
+            next_chars=list(dict.fromkeys(show_char_class(c) for c in self.next_classes())),
+            can_end=self.is_complete,
+        )
+
+
+@dataclass(frozen=True)
+class PositionView:
+    """A grammar position, described for display."""
+    open_rules: list[str]   # e.g. "record › author": the open rules, root first
+    next_chars: list[str]   # e.g. '[a-zA-Z ]' or '"|"': what the next character may be
+    can_end: bool           # does the output so far fully match the root rule?
+
+
+_ESCAPED = {"\n": r"\n", "\t": r"\t", "\r": r"\r", "\\": "\\\\"}
+
+
+def _show_char(char: str, specials: str) -> str:
+    if char in _ESCAPED:
+        return _ESCAPED[char]
+    return "\\" + char if char in specials else char
+
+
+def show_char_class(cls: CharClass) -> str:
+    """GBNF-style text for a character class: '"|"' for one character, otherwise like '[a-z ]'."""
+    if not cls.negated and len(cls.ranges) == 1 and cls.ranges[0][0] == cls.ranges[0][1]:
+        return '"' + _show_char(cls.ranges[0][0], '"') + '"'
+    body = "".join(
+        _show_char(low, "]-^") if low == high else f"{_show_char(low, ']-^')}-{_show_char(high, ']-^')}"
+        for low, high in cls.ranges
+    )
+    return f"[{'^' if cls.negated else ''}{body}]"
+
 
 def start_position(grammar: Grammar, root: str) -> GrammarPosition:
     return CompiledGrammar(grammar, root).start()

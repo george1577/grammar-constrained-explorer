@@ -11,6 +11,7 @@ from grammar_lab.decoding import Run
 from grammar_lab.lm import MODELS, LanguageModel
 from grammar_lab.pipelines import GrammarRunResult, rule_names, run_grammar, run_regex
 from grammar_lab.presets import GRAMMAR_PRESETS, OUTLINES_SNIPPET, REGEX_PRESETS, TRANSFORMERS_CFG_SNIPPET
+from trace_view import show_trace
 
 st.set_page_config(page_title="Grammar-Constrained Explorer", page_icon="🧩", layout="wide")
 
@@ -117,6 +118,8 @@ with tab1:
     if "t1" in st.session_state:
         used_grammar, res = st.session_state.t1
         show_results(res, used_grammar)
+        if not res.error:
+            show_trace(res.constrained, lm, key="t1")
 
     with st.expander("The same thing in the notebook (transformers-cfg)"):
         st.code(TRANSFORMERS_CFG_SNIPPET, language="python")
@@ -160,7 +163,8 @@ with tab2:
     res = st.session_state.get("t2")
     if res:
         show_results(res, regex if res.error else res.grammar_text)
-        # Step trace view (ticket #3) plugs in here, over res.constrained, once both tickets merge.
+        if not res.error:
+            show_trace(res.constrained, lm, key="t2")
 
     with st.expander("The same thing in the notebook (Outlines)"):
         st.code(OUTLINES_SNIPPET, language="python")

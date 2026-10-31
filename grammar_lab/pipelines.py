@@ -4,7 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from grammar_lab.decoding import Run, generate
+from grammar_lab import decoding
+from grammar_lab.decoding import ExactCount, Run, Step, generate
 from grammar_lab.gbnf import GrammarError, parse_gbnf
 from grammar_lab.model_boundary import ModelBoundary
 from grammar_lab.recognizer import start_position
@@ -24,20 +25,28 @@ class GrammarRunResult:
         return bool(self.constrained and self.constrained.complete)
 
 
+def exact_count(model: ModelBoundary, step: Step) -> ExactCount:
+    """On demand, for one recorded step: how many tokens of the full vocabulary the grammar allows."""
+    return decoding.exact_count(model.tokenizer, step)
+
+
 def chat_messages(system_prompt: str, user_text: str) -> list[dict]:
     return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}]
 
 
 def run_grammar(model: ModelBoundary, grammar: str, root: str, system_prompt: str, user_text: str,
-                max_new_tokens: int = 256) -> GrammarRunResult:
-    """Tab ①: a GBNF grammar-constrained run next to an unconstrained run of the same prompt."""
+                max_new_tokens: int = 256, prefilter: bool = True) -> GrammarRunResult:
+    """Tab ①: a GBNF grammar-constrained run next to an unconstrained run of the same prompt.
+
+    ``prefilter`` switches the first-character pre-filter used while checking tokens (same results either way).
+    """
     try:
         start = start_position(parse_gbnf(grammar), root)
     except GrammarError as error:
         return GrammarRunResult(error=error)
     prompt = model.tokenizer.chat_prompt_ids(chat_messages(system_prompt, user_text))
     return GrammarRunResult(
-        constrained=generate(model, prompt, max_new_tokens, start),
+        constrained=generate(model, prompt, max_new_tokens, start, prefilter=prefilter),
         unconstrained=generate(model, prompt, max_new_tokens),
     )
 
