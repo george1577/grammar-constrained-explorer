@@ -21,28 +21,34 @@ VOCAB = [
 IDS = {text: i for i, text in enumerate(VOCAB)}
 
 
-def fake_tokenizer(prompts: list) -> TokenizerView:
-    """``prompts`` collects every chat prompt built, so tests can see what was asked."""
+def fake_tokenizer(prompts: list, vocab: list[str] = VOCAB) -> TokenizerView:
+    """``prompts`` collects every chat prompt built, so tests can see what was asked.
+
+    ``vocab`` must contain EOS and IM_START.
+    """
+    ids = {text: i for i, text in enumerate(vocab)}
 
     def chat_prompt_ids(messages: list[dict]) -> list[int]:
         prompts.append(messages)
-        return [IDS[IM_START]]
+        return [ids[IM_START]]
 
     return TokenizerView(
-        token_texts=["" if t in (EOS, IM_START) else t for t in VOCAB],
-        special_ids=frozenset({IDS[EOS], IDS[IM_START]}),
-        eos_ids=frozenset({IDS[EOS]}),
+        token_texts=["" if t in (EOS, IM_START) else t for t in vocab],
+        special_ids=frozenset({ids[EOS], ids[IM_START]}),
+        eos_ids=frozenset({ids[EOS]}),
         chat_prompt_ids=chat_prompt_ids,
-        special_names={IDS[EOS]: EOS, IDS[IM_START]: IM_START},
-        decode=lambda ids: "".join(VOCAB[i] for i in ids if VOCAB[i] not in (EOS, IM_START)),
+        special_names={ids[EOS]: EOS, ids[IM_START]: IM_START},
+        decode=lambda token_ids: "".join(vocab[i] for i in token_ids if vocab[i] not in (EOS, IM_START)),
     )
 
 
 class FakeModel:
-    def __init__(self, script: list[list[str]]):
+    def __init__(self, script: list[list[str]], vocab: list[str] = VOCAB):
         self.script = script
+        self.vocab = vocab
+        self.ids = {text: i for i, text in enumerate(vocab)}
         self.prompts: list[list[dict]] = []
-        self.tokenizer = fake_tokenizer(self.prompts)
+        self.tokenizer = fake_tokenizer(self.prompts, vocab)
 
     def start(self, prompt_ids: list[int]):
         state = {"step": 0}
@@ -50,9 +56,9 @@ class FakeModel:
         def next_scores(prev):
             preferred = self.script[min(state["step"], len(self.script) - 1)]
             state["step"] += 1
-            logits = [-float(i) / 100 for i in range(len(VOCAB))]  # vocabulary order, all low
+            logits = [-float(i) / 100 for i in range(len(self.vocab))]  # vocabulary order, all low
             for rank, text in enumerate(preferred):
-                logits[IDS[text]] = 10.0 - rank
+                logits[self.ids[text]] = 10.0 - rank
             return ListScores(logits)
 
         return next_scores

@@ -1,5 +1,6 @@
 """One entry point per tab: connects the model boundary to the grammar engine."""
 
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -8,13 +9,15 @@ from grammar_lab.decoding import ExactCount, Run, Step, generate
 from grammar_lab.gbnf import GrammarError, parse_gbnf
 from grammar_lab.model_boundary import ModelBoundary
 from grammar_lab.recognizer import start_position
+from grammar_lab.regex import ROOT, regex_to_gbnf
 
 
 @dataclass
 class GrammarRunResult:
     constrained: Optional[Run] = None
     unconstrained: Optional[Run] = None
-    error: Optional[GrammarError] = None  # set when the grammar fails to parse
+    error: Optional[GrammarError] = None  # set when the grammar (or regex) fails to parse
+    grammar_text: Optional[str] = None    # the GBNF actually used, when generated (regex tab)
 
     @property
     def complete(self) -> bool:
@@ -46,3 +49,24 @@ def run_grammar(model: ModelBoundary, grammar: str, root: str, system_prompt: st
         constrained=generate(model, prompt, max_new_tokens, start, prefilter=prefilter),
         unconstrained=generate(model, prompt, max_new_tokens),
     )
+
+
+def run_regex(model: ModelBoundary, regex: str, system_prompt: str, user_text: str,
+              max_new_tokens: int = 256) -> GrammarRunResult:
+    """Tab ②: the regex is converted to GBNF, then decoded exactly like tab ①."""
+    try:
+        grammar_text = regex_to_gbnf(regex)
+    except GrammarError as error:
+        return GrammarRunResult(error=error)
+    result = run_grammar(model, grammar_text, ROOT, system_prompt, user_text, max_new_tokens)
+    result.grammar_text = grammar_text
+    return result
+
+
+def rule_names(grammar: str) -> list[str]:
+    """The rule names defined in GBNF text, in order, for choosing the root rule.
+
+    A plain line scan, so the choices stay available while the grammar has errors.
+    """
+    names = re.findall(r"^[ \t]*([A-Za-z0-9_-]+)[ \t]*::=", grammar, flags=re.MULTILINE)
+    return list(dict.fromkeys(names))

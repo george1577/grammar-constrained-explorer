@@ -1,8 +1,9 @@
 """Parse GBNF-subset text into a Grammar (rules of plain expression objects).
 
-Supported so far: quoted literals with escapes, character classes with ranges and
-negation, rule references, sequences, alternation, ``*`` and ``#`` comments.
-Anything else is reported as a GrammarError with its line and column.
+Supported: quoted literals with escapes, character classes with ranges and negation,
+rule references, sequences, groups ``( )``, alternation, ``* + ?`` and ``#`` comments.
+Anything else (including counted repeats ``{m,n}``) is reported as a GrammarError with
+its line and column.
 """
 
 from dataclasses import dataclass
@@ -65,6 +66,9 @@ class Grammar:
 ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\", '"': '"', "[": "[", "]": "]", "-": "-", "^": "^"}
 
 
+REPEATS = {"*": (0, None), "+": (1, None), "?": (0, 1)}
+
+
 def parse_gbnf(text: str) -> Grammar:
     return _Parser(text).parse()
 
@@ -120,6 +124,7 @@ class _Parser:
         rules: dict[str, Expr] = {}
         refs: list[RuleRef] = []
         self.refs = refs
+        self.rule_starts: dict[str, tuple[int, int]] = {}  # rule name -> (line, column)
         self.skip_space()
         while self.pos < len(self.text):
             start = self.pos
@@ -128,6 +133,7 @@ class _Parser:
                 raise self.error("expected a rule like `name ::= ...`")
             if name in rules:
                 raise self.error(f"rule `{name}` is defined twice", start)
+            self.rule_starts[name] = self.where(start)
             self.pos += len(name)
             self.skip_space()
             self.pos += len("::=")
@@ -138,6 +144,7 @@ class _Parser:
         for ref in refs:
             if ref.name not in rules:
                 raise GrammarError(f"rule `{ref.name}` is used but never defined", ref.line, ref.column)
+        _reject_left_recursion(rules, self.rule_starts)
         return Grammar(rules)
 
     def alternation(self) -> Expr:
@@ -152,20 +159,33 @@ class _Parser:
         while True:
             self.skip_space()
             c = self.peek()
-            if c in ("", "|") or self.at_rule_start():
+            if c in ("", "|", ")") or self.at_rule_start():
                 break
             items.append(self.postfix())
         return items[0] if len(items) == 1 else Seq(tuple(items))
 
     def postfix(self) -> Expr:
         item = self.primary()
-        if self.peek() == "*":
+        c = self.peek()
+        if c in REPEATS:
             self.pos += 1
-            return Repeat(item, 0, None)
+            return Repeat(item, *REPEATS[c])
+        if c == "{":
+            raise self.error("counted repeats like `{m,n}` are not supported by this app; "
+                             "write the item out several times, using `?` for optional copies")
         return item
 
     def primary(self) -> Expr:
         c = self.peek()
+        if c == "(":
+            start = self.pos
+            self.pos += 1
+            inner = self.alternation()
+            self.skip_space()
+            if self.peek() != ")":
+                raise self.error("this group is never closed with `)`", start)
+            self.pos += 1
+            return inner
         if c == '"':
             return self.literal()
         if c == "[":
@@ -222,3 +242,82 @@ class _Parser:
             self.pos += 1
             return ESCAPES[c]
         raise self.error(f"unknown escape `\\{c}`", self.pos - 1)
+
+
+# ---- left recursion ---------------------------------------------------------------
+# A rule is left-recursive if it can start with itself, directly (`expr ::= expr "+" term`)
+# or through other rules and empty-matching prefixes (`a ::= ws b`, `b ::= a "x"`). The
+# recognizer would expand such a rule forever, so it is rejected up front.
+
+LEFT_RECURSION_HINT = ('rewrite it with a repeat instead, e.g. `expr ::= term ("+" term)*` '
+                       'rather than `expr ::= expr "+" term | term`')
+
+
+def _nullable_rules(rules: dict[str, Expr]) -> set[str]:
+    nullable: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for name, body in rules.items():
+            if name not in nullable and _can_be_empty(body, nullable):
+                nullable.add(name)
+                changed = True
+    return nullable
+
+
+def _can_be_empty(expr: Expr, nullable: set[str]) -> bool:
+    if isinstance(expr, Literal):
+        return expr.text == ""
+    if isinstance(expr, CharClass):
+        return False
+    if isinstance(expr, RuleRef):
+        return expr.name in nullable
+    if isinstance(expr, Seq):
+        return all(_can_be_empty(item, nullable) for item in expr.items)
+    if isinstance(expr, Alt):
+        return any(_can_be_empty(option, nullable) for option in expr.options)
+    return expr.min == 0 or _can_be_empty(expr.item, nullable)  # Repeat
+
+
+def _first_refs(expr: Expr, nullable: set[str]) -> set[str]:
+    """The rules that may be expanded before any character of ``expr`` is matched."""
+    if isinstance(expr, RuleRef):
+        return {expr.name}
+    if isinstance(expr, Seq):
+        out: set[str] = set()
+        for item in expr.items:
+            out |= _first_refs(item, nullable)
+            if not _can_be_empty(item, nullable):
+                break
+        return out
+    if isinstance(expr, Alt):
+        return set().union(*(_first_refs(option, nullable) for option in expr.options))
+    if isinstance(expr, Repeat):
+        return _first_refs(expr.item, nullable)
+    return set()
+
+
+def _reject_left_recursion(rules: dict[str, Expr], starts: dict[str, tuple[int, int]]):
+    nullable = _nullable_rules(rules)
+    first = {name: _first_refs(body, nullable) for name, body in rules.items()}
+    for name in rules:  # report the first rule, in written order, that can start with itself
+        path = _path_back_to(name, first)
+        if path:
+            chain = " → ".join([name, *path])
+            raise GrammarError(f"rule `{name}` is left-recursive: it can start with itself ({chain}); "
+                               f"{LEFT_RECURSION_HINT}", *starts[name])
+
+
+def _path_back_to(target: str, first: dict[str, set[str]]) -> list[str]:
+    """A chain of first-position references from ``target`` back to itself, or []."""
+    stack = [(child, [child]) for child in sorted(first[target])]
+    seen: set[str] = set()
+    while stack:
+        name, path = stack.pop()
+        if name == target:
+            return path
+        if name in seen:
+            continue
+        seen.add(name)
+        stack.extend((child, path + [child]) for child in sorted(first[name]))
+    return []
