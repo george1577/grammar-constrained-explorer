@@ -159,3 +159,44 @@ generator = outlines.generate.regex(
 )
 structured = generator(convert_message_to_prompt(input_message), max_tokens=30)
 '''
+
+
+# ---- JSON mode (notebook 2a) ----------------------------------------------------------------
+
+@dataclass(frozen=True)
+class PromptPreset:
+    name: str
+    system_prompt: str
+    inputs: dict[str, str]
+
+
+# Notebook 2a, parse_book_info (OpenAI JSON mode). Its message role is "developer", OpenAI's
+# newer name for "system". The prompt differs from notebook 1 only in its third line.
+JSON_BOOK = PromptPreset(
+    name="Book record as JSON",
+    system_prompt="""
+    You will be given a short paragraph about a book.
+    Extract the author, title, and publication year of the book.
+    Return the result as JSON with the keys author, title, and year.
+    If any piece of information is not found, fill the spot with NULL
+    """,
+    inputs={"Cholera": CHOLERA, "Tirukkural": TIRUKKURAL},
+)
+
+JSON_PRESETS = {JSON_BOOK.name: JSON_BOOK}
+
+OPENAI_JSON_MODE_SNIPPET = '''from openai import OpenAI
+client = OpenAI()
+
+input_message = [
+    {"role": "developer", "content": system_prompt},
+    {"role": "user", "content": paragraph}
+]
+
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=input_message,
+    response_format={"type": "json_object"}
+)
+return response.choices[0].message.content
+'''

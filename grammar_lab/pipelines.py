@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from grammar_lab import decoding
+from grammar_lab import decoding, json_grammar
 from grammar_lab.decoding import ExactCount, Run, Step, generate
 from grammar_lab.gbnf import GrammarError, parse_gbnf
 from grammar_lab.model_boundary import ModelBoundary
@@ -59,6 +59,15 @@ def run_regex(model: ModelBoundary, regex: str, system_prompt: str, user_text: s
     except GrammarError as error:
         return GrammarRunResult(error=error)
     result = run_grammar(model, grammar_text, ROOT, system_prompt, user_text, max_new_tokens)
+    result.grammar_text = grammar_text
+    return result
+
+
+def run_json_mode(model: ModelBoundary, system_prompt: str, user_text: str, limit_whitespace: bool = True,
+                  max_new_tokens: int = 256) -> GrammarRunResult:
+    """Tab ③: a grammar allowing any JSON object, so keys and value types are up to the model."""
+    grammar_text = json_grammar.json_gbnf(limit_whitespace)
+    result = run_grammar(model, grammar_text, json_grammar.ROOT, system_prompt, user_text, max_new_tokens)
     result.grammar_text = grammar_text
     return result
 
