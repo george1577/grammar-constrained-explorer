@@ -13,16 +13,120 @@ Supported: ``type`` object, string, number, integer or boolean; ``properties``; 
 import json
 import re
 
-from grammar_lab.gbnf import gbnf_literal
+from grammar_lab.gbnf import GrammarError, gbnf_literal
 from grammar_lab.json_grammar import LIMITED_WS, NUMBER_RULES, STRING_RULES
 
 ROOT = "root"
 PRIMITIVE_RULES = {"string": STRING_RULES, **NUMBER_RULES}
 
 
+TYPES = ("object", "string", "number", "integer", "boolean")
+ANNOTATIONS = {"title", "description", "default"}
+OBJECT_KEYWORDS = ANNOTATIONS | {"type", "properties", "required", "additionalProperties"}
+VALUE_KEYWORDS = ANNOTATIONS | {"type", "enum"}
+JSON_TYPES = {"string": str, "number": (int, float), "integer": int, "boolean": bool}
+
+
+class SchemaError(GrammarError):
+    """A schema that is not valid JSON or uses something outside the supported subset."""
+
+
+def parse_schema(schema_text: str) -> dict:
+    """The schema as a dict, checked against the supported subset (or raise SchemaError)."""
+    try:
+        schema = json.loads(schema_text)
+    except json.JSONDecodeError as error:
+        raise SchemaError(f"the schema is not valid JSON: {error.msg}", error.lineno, error.colno) from None
+    _Checker(schema_text).top(schema)
+    return schema
+
+
+class _Checker:
+    """Walks the schema; each error points at the line of the key it is about."""
+
+    def __init__(self, text: str):
+        self.text = text
+
+    def error(self, message: str, path: tuple[str, ...]) -> SchemaError:
+        fields = [path[i + 1] for i in range(len(path) - 1) if path[i] == "properties"]
+        about = f"field `{' › '.join(fields)}`: " if fields else ""
+        return SchemaError(about + message, *self.locate(path))
+
+    def locate(self, path: tuple[str, ...]) -> tuple[int, int]:
+        """Line and column of the deepest key of ``path`` found in the text, searching key by key."""
+        pos = 0
+        for key in path:
+            match = re.compile(re.escape(json.dumps(key, ensure_ascii=False)) + r"\s*:").search(self.text, pos)
+            if not match:
+                break
+            pos = match.start()
+        line = self.text.count("\n", 0, pos) + 1
+        return line, pos - (self.text.rfind("\n", 0, pos) + 1) + 1
+
+    def top(self, schema):
+        if not isinstance(schema, dict):
+            raise self.error("the schema must be a JSON object (`{...}`)", ())
+        if schema.get("type") != "object":
+            raise self.error('the top level must be `"type": "object"` with `properties`', ("type",))
+        self.object(schema, ())
+
+    def object(self, schema: dict, path: tuple[str, ...]):
+        self.keywords(schema, OBJECT_KEYWORDS, path)
+        properties = schema.get("properties", {})
+        if not isinstance(properties, dict):
+            raise self.error("`properties` must be an object mapping field names to schemas", path + ("properties",))
+        if schema.get("additionalProperties", False) is not False:
+            raise self.error("`additionalProperties` can only be false: only the listed fields can appear",
+                             path + ("additionalProperties",))
+        required = schema.get("required", [])
+        if not isinstance(required, list) or not all(isinstance(r, str) for r in required):
+            raise self.error("`required` must be a list of field names", path + ("required",))
+        for name in required:
+            if name not in properties:
+                raise self.error(f"`required` lists `{name}`, which is not in `properties`", path + ("required",))
+        for name, field in properties.items():
+            self.field(field, path + ("properties", name))
+
+    def field(self, field, path: tuple[str, ...]):
+        if not isinstance(field, dict):
+            raise self.error("each field's schema must be a JSON object", path)
+        kind = field.get("type")
+        if isinstance(kind, list):
+            raise self.error("a list of types is not supported: give a single `type`", path + ("type",))
+        if kind is not None and kind not in TYPES:
+            raise self.error(f"type `{kind}` is not supported (use {', '.join(TYPES)})", path + ("type",))
+        if kind == "object":
+            self.object(field, path)
+            return
+        self.keywords(field, VALUE_KEYWORDS, path)
+        if "enum" in field:
+            self.enum(field["enum"], kind, path + ("enum",))
+        elif kind is None:
+            raise self.error("needs a `type` or an `enum`", path)
+
+    def enum(self, values, kind, path: tuple[str, ...]):
+        if not isinstance(values, list) or not values:
+            raise self.error("`enum` needs at least one value", path)
+        expected = JSON_TYPES.get(kind)
+        for value in values:
+            shown = json.dumps(value, ensure_ascii=False)
+            if isinstance(value, (dict, list)):
+                raise self.error(f"enum value `{shown}` is not supported: use strings, numbers, booleans or null",
+                                 path)
+            number_given_bool = kind in ("number", "integer") and isinstance(value, bool)
+            if expected and (not isinstance(value, expected) or number_given_bool):
+                raise self.error(f"enum value `{shown}` is not a {kind}", path)
+
+    def keywords(self, schema: dict, allowed: set[str], path: tuple[str, ...]):
+        for keyword in schema:
+            if keyword not in allowed:
+                raise self.error(f"`{keyword}` is not supported in this app's JSON Schema subset "
+                                 f"(supported here: {', '.join(sorted(allowed))})", path + (keyword,))
+
+
 def schema_to_gbnf(schema_text: str) -> str:
-    """GBNF text whose root rule matches exactly the JSON the schema describes."""
-    schema = json.loads(schema_text)
+    """GBNF text whose root rule matches exactly the JSON the schema describes, or raise SchemaError."""
+    schema = parse_schema(schema_text)
     rules: dict[str, str] = {}
     used: set[str] = set()
     _object_rule(ROOT, schema, rules, used)

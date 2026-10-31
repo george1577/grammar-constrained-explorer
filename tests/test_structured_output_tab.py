@@ -1,5 +1,7 @@
 """Tab ④ (structured output) through its pipeline entry point, with a fake model."""
 
+import pytest
+
 from grammar_lab.pipelines import run_structured
 from grammar_lab.presets import INVOICE
 from tests.fakes import EOS, IM_START, FakeModel
@@ -96,3 +98,37 @@ def test_nested_objects_integers_and_booleans_are_constrained_too():
         '    "\\"rating\\":" ws integer\n'
         '    "}" ws\n'
     )
+
+
+def schema_with(field: str, required: str = '["amount"]') -> str:
+    return '{\n  "type": "object",\n  "properties": {\n    "amount": ' + field + '\n  },\n  "required": ' + required + "\n}"
+
+
+@pytest.mark.parametrize("schema, line, words", [
+    ('{\n  "type": "object",\n  "properties": {\n', 4, "not valid JSON"),
+    ('["purpose", "amount"]', 1, "must be a JSON object"),
+    ('{"type": "string"}', 1, 'top level must be `"type": "object"`'),
+    (schema_with('{"type": "array", "items": {"type": "number"}}'), 4, "type `array` is not supported"),
+    (schema_with('{"type": ["number", "null"]}'), 4, "a list of types is not supported"),
+    (schema_with('{"description": "how much"}'), 4, "needs a `type` or an `enum`"),
+    (schema_with('{"type": "number", "minimum": 0}'), 4, "`minimum` is not supported"),
+    (schema_with('{"anyOf": [{"type": "number"}]}'), 4, "`anyOf` is not supported"),
+    (schema_with('{"type": "string", "enum": []}'), 4, "`enum` needs at least one value"),
+    (schema_with('{"type": "string", "enum": ["USD", 1]}'), 4, "`1` is not a string"),
+    (schema_with('{"type": "number"}', required='["amount", "price"]'), 6, "`price`, which is not in `properties`"),
+    ('{"type": "object", "properties": {"a": {"type": "string"}}, "additionalProperties": true}', 1,
+     "`additionalProperties` can only be false"),
+])
+def test_invalid_or_unsupported_schemas_give_clear_located_errors_and_no_runs(schema, line, words):
+    result = run_invoice(invoice_model(WAYWARD_SCRIPT), schema=schema)
+
+    assert result.constrained is None and result.unconstrained is None
+    assert words in str(result.error)
+    assert result.error.line == line
+    assert str(result.error).startswith(f"Line {line}, column ")
+
+
+def test_schema_errors_name_the_field_they_are_about():
+    result = run_invoice(invoice_model(WAYWARD_SCRIPT), schema=schema_with('{"type": "array"}'))
+
+    assert "`amount`" in str(result.error)
