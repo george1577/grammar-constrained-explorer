@@ -76,14 +76,21 @@ def run_json_mode(model: ModelBoundary, system_prompt: str, user_text: str, limi
 def run_structured(model: ModelBoundary, schema: str, system_prompt: str, user_text: str,
                    max_new_tokens: int = 256) -> GrammarRunResult:
     """Tab ④: the JSON Schema is converted to GBNF (fields in order, all required), then decoded."""
+    preview = preview_schema(schema)
+    if preview.error:
+        return preview
+    result = run_grammar(model, preview.grammar_text, json_schema.ROOT, system_prompt, user_text, max_new_tokens)
+    result.grammar_text, result.dataclass_view = preview.grammar_text, preview.dataclass_view
+    return result
+
+
+def preview_schema(schema: str) -> GrammarRunResult:
+    """Tab ④ without running the model: the generated GBNF and dataclass view, or the schema error."""
     try:
-        grammar_text = json_schema.schema_to_gbnf(schema)
+        return GrammarRunResult(grammar_text=json_schema.schema_to_gbnf(schema),
+                                dataclass_view=json_schema.schema_to_dataclass(schema))
     except GrammarError as error:
         return GrammarRunResult(error=error)
-    result = run_grammar(model, grammar_text, json_schema.ROOT, system_prompt, user_text, max_new_tokens)
-    result.grammar_text = grammar_text
-    result.dataclass_view = json_schema.schema_to_dataclass(schema)
-    return result
 
 
 def rule_names(grammar: str) -> list[str]:
